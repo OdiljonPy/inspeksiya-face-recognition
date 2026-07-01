@@ -12,11 +12,11 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 # путь, куда склонирован/скопирован проект:
-WorkingDirectory=/opt/face-recognition
+WorkingDirectory=/root/inspeksiya-face-recognition
 Environment=PYTHONUNBUFFERED=1
-Environment=INSIGHTFACE_HOME=/opt/face-recognition/.insightface
+Environment=INSIGHTFACE_HOME=/root/inspeksiya-face-recognition/.insightface
 # gpu_setup сам предзагружает CUDA .so из venv (nvidia-*-cu12); LD_LIBRARY_PATH не обязателен.
-ExecStart=/opt/face-recognition/.venv/bin/python src/main.py
+ExecStart=/root/inspeksiya-face-recognition/.venv/bin/python src/main.py
 Restart=always
 RestartSec=5
 # не убивать по OOM слишком агрессивно
