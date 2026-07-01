@@ -103,26 +103,37 @@ def main():
         return 1
 
     modes = {c["id"]: c.get("mode", "face") for c in cameras}
+    default_det = int(cfg["recognition"]["det_size"])
+    # per-camera параметры
+    cam_det = {c["id"]: int(c.get("det_size", default_det)) for c in cameras}
+    cam_width = {c["id"]: int(c.get("width", 0)) for c in cameras}   # 0 = без ресайза
     need_face = any(m in ("face", "both") for m in modes.values())
     need_anpr = any(m in ("plate", "both") for m in modes.values())
     print(f"Камер: {len(cameras)}. Режимы: "
           f"{sum(m in ('face','both') for m in modes.values())} c лицами, "
           f"{sum(m in ('plate','both') for m in modes.values())} c ANPR.")
 
-    # --- Лица (если есть face/both) ---
-    engine = gallery = event_log = None
+    # --- Лица (если есть face/both): ПУЛ движков по разным det_size ---
+    face_engines = {}
+    gallery = event_log = None
     if need_face:
-        print("Инициализация движка лиц...")
-        engine = FaceEngine(
-            model_name=cfg["recognition"]["model_name"],
-            det_size=(cfg["recognition"]["det_size"], cfg["recognition"]["det_size"]),
-            ctx_id=cfg["gpu"]["ctx_id"],
-            allowed_modules=["detection", "recognition"],
-        )
-        FaceEngine.warmup(engine, size=cfg["recognition"]["det_size"])
+        # какие det_size реально нужны (только у face/both камер)
+        needed_det = sorted({cam_det[c["id"]] for c in cameras
+                             if modes[c["id"]] in ("face", "both")})
+        print(f"Инициализация движков лиц (det_size: {needed_det})...")
+        for ds in needed_det:
+            e = FaceEngine(
+                model_name=cfg["recognition"]["model_name"],
+                det_size=(ds, ds),
+                ctx_id=cfg["gpu"]["ctx_id"],
+                allowed_modules=["detection", "recognition"],
+            )
+            FaceEngine.warmup(e, size=ds)
+            face_engines[ds] = e
         gallery = Gallery(cfg)
         event_log = EventLog(cfg["paths"]["db"], dedup_seconds=cfg["events"]["dedup_seconds"])
-        print(f"  лица GPU={engine.on_gpu}, ID в галерее={gallery.count()}")
+        any_gpu = any(e.on_gpu for e in face_engines.values())
+        print(f"  лица GPU={any_gpu}, движков={len(face_engines)}, ID в галерее={gallery.count()}")
 
     # --- ANPR (если есть plate/both) ---
     anpr_engine = anpr_validator = vehicle_log = None
@@ -139,9 +150,9 @@ def main():
 
     workers = [CameraWorker(cam, q, cfg, stop_event) for cam in cameras]
     infer = InferenceWorker(
-        q, engine, gallery, cfg, stop_event,
+        q, face_engines, gallery, cfg, stop_event,
         make_face_handler(event_log, args.quiet) if need_face else (lambda r: None),
-        cam_modes=modes,
+        cam_modes=modes, cam_det=cam_det, cam_width=cam_width,
         anpr_engine=anpr_engine, anpr_validator=anpr_validator,
         vehicle_log=vehicle_log, plates_dir=plates_dir,
         on_plate=make_plate_handler(args.quiet) if need_anpr else None,

@@ -64,6 +64,7 @@ class Gallery:
         self.owners = np.zeros((0,), dtype=np.int64)
         self.index = faiss.IndexFlatIP(dim)
         self._next_num = 1
+        self._loaded_mtime = 0.0        # mtime meta.json на момент нашей последней записи/чтения
 
         os.makedirs(self.faces_dir, exist_ok=True)
         self.load()
@@ -82,14 +83,36 @@ class Gallery:
             meta = json.load(f)
         self.identities = [Identity(**d) for d in meta.get("identities", [])]
         self._next_num = meta.get("next_num", len(self.identities) + 1)
+        self.embeddings = np.zeros((0, self.dim), dtype=np.float32)
+        self.owners = np.zeros((0,), dtype=np.int64)
+        self.index = faiss.IndexFlatIP(self.dim)
         if os.path.exists(emb_p) and os.path.exists(own_p):
             self.embeddings = np.load(emb_p).astype(np.float32)
             self.owners = np.load(own_p).astype(np.int64)
             if self.embeddings.shape[0]:
-                self.index = faiss.IndexFlatIP(self.dim)
                 self.index.add(self.embeddings)
+        try:
+            self._loaded_mtime = os.path.getmtime(meta_p)
+        except OSError:
+            self._loaded_mtime = 0.0
         print(f"[gallery] загружено: {len(self.identities)} ID, "
               f"{self.embeddings.shape[0]} эмбеддингов")
+
+    def maybe_reload(self):
+        """
+        Если meta.json изменён ДРУГИМ процессом (напр. дашборд удалил человека) —
+        перечитать галерею с диска. Так удаление из дашборда «прилипает», а процесс
+        распознавания не воскрешает удалённого. Свои же записи (save обновляет mtime)
+        перечитку не триггерят. Дёшево: один stat.
+        """
+        _, _, meta_p = self._paths()
+        try:
+            m = os.path.getmtime(meta_p)
+        except OSError:
+            return
+        if m != self._loaded_mtime:
+            with self.lock:
+                self.load()
 
     def save(self):
         emb_p, own_p, meta_p = self._paths()
@@ -103,6 +126,10 @@ class Gallery:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
         os.replace(tmp, meta_p)  # атомарная замена (важно: meta читает дашборд)
+        try:
+            self._loaded_mtime = os.path.getmtime(meta_p)  # чтобы не перечитывать свою же запись
+        except OSError:
+            pass
 
     # ------------------------- основная логика -------------------------
     def identify(self, normed_emb: np.ndarray):

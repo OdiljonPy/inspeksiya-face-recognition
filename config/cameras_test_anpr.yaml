@@ -1,14 +1,19 @@
-# ТЕСТ Этапа 4 ANPR: смешанные режимы на видеофайлах (зацикливаются).
+# ТЕСТ Этапа 4 ANPR + per-camera настройки (det_size/fps/width).
 cameras:
   - id: cam_face
     zone: "Проходная (лица)"
     rtsp: "D:/GASN/face-recognition/data/_cam_known.mp4"
     mode: face
+    det_size: 640          # ближняя — базовое качество, быстро
+    fps: 3
   - id: cam_plate
     zone: "Въезд (номера)"
     rtsp: "D:/GASN/face-recognition/data/_cam_plate.mp4"
     mode: plate
+    fps: 2
   - id: cam_both
     zone: "КПП (лица+номера)"
     rtsp: "D:/GASN/face-recognition/data/_cam_both.mp4"
     mode: both
+    det_size: 1280         # дальняя/важная — выше качество лиц
+    fps: 2

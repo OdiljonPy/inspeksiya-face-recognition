@@ -108,12 +108,16 @@ class CameraTracker:
 
         # 1) Трек уже знает свою личность -> держим ID, доучиваем ракурсы
         if t.label is not None:
-            ident, score = self.g.identify(emb)
-            if frontality(f.kps) >= self.g.min_frontality:
-                own = self.g.get_by_label(t.label)
-                if own is not None:
+            own = self.g.get_by_label(t.label)
+            if own is None:
+                # личность удалили (напр. из дашборда) — сбрасываем трек, переидентифицируем
+                t.label = None
+                t.crop_path = ""
+            else:
+                ident, score = self.g.identify(emb)
+                if frontality(f.kps) >= self.g.min_frontality:
                     self.g.maybe_add_embedding(own, emb, score, ts)
-            return FaceResult(t.bbox, t.label, score, False, t.crop_path)
+                return FaceResult(t.bbox, t.label, score, False, t.crop_path)
 
         # 2) Личность ещё не присвоена — ищем в галерее
         ident, score = self.g.identify(emb)

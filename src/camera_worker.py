@@ -104,7 +104,8 @@ class CameraWorker(threading.Thread):
         self.cam = cam
         self.q = frame_queue
         self.stop_event = stop_event
-        self.target_fps = settings["recognition"]["target_fps"]
+        # per-camera fps (иначе дефолт из settings)
+        self.target_fps = float(cam.get("fps", settings["recognition"]["target_fps"]))
         self.stats = CamStats(cam_id=cam["id"], zone=cam.get("zone", ""))
 
     # ----- обработка одного открытого источника -----
