@@ -95,7 +95,9 @@ def _hud(frame, lines):
 
 
 def capture_loop(cfg, source, width, det_size, target_fps, do_faces, do_plates,
-                 face_engine, anpr, validator, gallery, stop):
+                 face_engine, anpr, validator, gallery, stop=None):
+    if stop is None:
+        stop = threading.Event()
     min_det = cfg["recognition"]["min_det_score"]
     min_conf = cfg["anpr"]["min_ocr_confidence"]
     fps_ema, t_prev = 0.0, None
@@ -224,7 +226,10 @@ def main():
     ap.add_argument("--source", default="", help="RTSP/файл")
     ap.add_argument("--camera", default="", help="id камеры из cameras.yaml")
     ap.add_argument("--port", type=int, default=8091)
-    ap.add_argument("--width", type=int, default=0, help="ресайз по ширине (0 = из settings)")
+    ap.add_argument("--width", type=int, default=0,
+                    help="ресайз по ширине; 0 = БЕЗ ресайза (нативное разрешение) — для дебага")
+    ap.add_argument("--det-size", type=int, default=1600,
+                    help="вход детектора лиц (SCRFD); больше = ловит мелкие лица, но медленнее")
     ap.add_argument("--no-faces", action="store_true")
     ap.add_argument("--no-plates", action="store_true")
     ap.add_argument("--recognize", action="store_true", help="подписывать лица ID из галереи")
@@ -235,7 +240,8 @@ def main():
 
     cfg = load_settings()
     source = resolve_source(args, cfg)
-    width = args.width or cfg["recognition"]["width"]
+    width = args.width            # 0 = без ресайза (нативное разрешение)
+    det_size = args.det_size
     do_faces = not args.no_faces
     do_plates = not args.no_plates
 
@@ -243,7 +249,7 @@ def main():
     if do_faces:
         face_engine = FaceEngine(
             model_name=cfg["recognition"]["model_name"],
-            det_size=(cfg["recognition"]["det_size"], cfg["recognition"]["det_size"]),
+            det_size=(det_size, det_size),
             ctx_id=cfg["gpu"]["ctx_id"],
             allowed_modules=["detection", "recognition"] if args.recognize else ["detection"],
         )
@@ -257,13 +263,17 @@ def main():
         validator = PlateValidator(cfg["anpr"]["plate_regex"])
 
     print(f"Источник: {source}\nФейсы={do_faces} Номера={do_plates} "
+          f"width={'NATIVE' if not width else width} det_size={det_size} "
           f"GPU_faces={getattr(face_engine,'on_gpu',None)} GPU_anpr={getattr(anpr,'on_gpu',None)}")
     print(f"Открой в браузере: http://<IP-сервера>:{args.port}")
 
     stop = threading.Event()
-    t = threading.Thread(target=capture_loop, args=(
-        cfg, source, width, cfg["recognition"]["target_fps"], do_faces, do_plates,
-        face_engine, anpr, validator, gallery, stop), daemon=True)
+    # именованные аргументы — устойчиво к порядку/числу параметров
+    t = threading.Thread(target=capture_loop, kwargs=dict(
+        cfg=cfg, source=source, width=width, det_size=det_size,
+        target_fps=cfg["recognition"]["target_fps"], do_faces=do_faces, do_plates=do_plates,
+        face_engine=face_engine, anpr=anpr, validator=validator, gallery=gallery, stop=stop),
+        daemon=True)
     t.start()
     try:
         uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")

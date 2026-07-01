@@ -107,11 +107,14 @@ sudo ufw allow 8000/tcp     # если включён ufw и нужен дост
 Рисует боксы лиц и номеров с их размером в пикселях — сразу видно, мелко ли для
 распознавания.
 ```bash
-# по id из cameras.yaml:
+# по id из cameras.yaml (по умолчанию БЕЗ ресайза — нативное разрешение, det_size=1600):
 python src/debug_stream.py --camera cam05 --port 8091
-# или прямой RTSP, с подписью ID из галереи и большим ресайзом:
-python src/debug_stream.py --source "rtsp://user:pass@ip:554/..." --port 8091 --recognize --width 1920
+# прямой RTSP + подпись ID из галереи; det_size больше = ловит более мелкие лица:
+python src/debug_stream.py --source "rtsp://user:pass@ip:554/..." --port 8091 --recognize --det-size 1600
+# если нужен ресайз (быстрее): --width 1280
 ```
+Дебаг-стрим НЕ жмёт кадр (в отличие от `main.py`, где ресайз до 960 ради 10 камер) и
+поднимает `det_size` до 1600 — чтобы увидеть, ловятся ли лица на полном разрешении.
 Открой `http://<IP-сервера>:8091` (открой порт: `sudo ufw allow 8091/tcp`).
 В Docker: `docker compose -f deploy/docker-compose.yml run --rm -p 8091:8091 recognition \
   python src/debug_stream.py --camera cam05 --port 8091`.

@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     depends_on: [recognition]
     ports:
-      - "8000:8000"                # дашборд: http://<server-ip>:8000
+      - "8090:8090"                # дашборд: http://<server-ip>:8000
     volumes:
       - ../data:/app/data
       - ../config:/app/config

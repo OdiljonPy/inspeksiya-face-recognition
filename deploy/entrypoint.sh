@@ -22,7 +22,7 @@ case "${1:-recognition}" in
     ;;
   dashboard)
     echo "[entrypoint] старт дашборда на 0.0.0.0:8000"
-    exec python -m uvicorn web.app:app --host 0.0.0.0 --port 8000
+    exec python -m uvicorn web.app:app --host 0.0.0.0 --port 8090
     ;;
   preload)
     exec python deploy/preload_models.py

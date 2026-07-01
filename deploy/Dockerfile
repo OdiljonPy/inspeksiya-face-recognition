@@ -36,6 +36,6 @@ RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 # Если сборка без сети — строка не валит образ, модели скачаются при первом старте.
 RUN python deploy/preload_models.py || echo "[build] preload пропущен — модели скачаются в рантайме"
 
-EXPOSE 8000
+EXPOSE 8090
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["recognition"]
