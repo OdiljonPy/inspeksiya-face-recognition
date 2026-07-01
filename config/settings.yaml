@@ -13,7 +13,7 @@ gallery:
   dir: data/gallery               # сюда: faces/<ID>.jpg, embeddings.npy, owners.npy, meta.json
   # Двухпороговая логика (борьба с дублями ID при повороте головы):
   match_threshold: 0.50           # score >= -> точно тот же ID (СОВПАДЕНИЕ — оставляем 0.50)
-  new_id_threshold: 0.30          # новый ID ТОЛЬКО если ближайший score < 0.30 (иначе -> ближайший существующий)
+  new_id_threshold: 0.50          # новый ID ТОЛЬКО если ближайший score < 0.30 (иначе -> ближайший существующий)
   max_embeddings_per_id: 8        # сколько ракурсов (эмбеддингов) копить на один ID
   add_embedding_below: 0.9        # добавлять новый ракурс, если score в [match_threshold, add_embedding_below)
   crop_margin: 0.25               # поля вокруг лица при сохранении снимка
