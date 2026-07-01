@@ -31,27 +31,33 @@ cameras:
 #    zone: "Въезд / КПП"
 #    rtsp: "rtsp://admin:admin123@12.6.0.8:8554/cam/realmonitor?channel=1&subtype=0"
 #    mode: both
+
   - id: cam03
     zone: "Avloniy - 1"
     rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/601"
     mode: both
+    det_size: 1280
   - id: cam04
     zone: "Avloniy - 2"
     rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/101"
     mode: both
+    det_size: 1280
   - id: cam05
     zone: "Avloniy - 3"
     rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/301"
     mode: both
+    det_size: 1280
 
   - id: cam06
-    zone: "102-maktab"
+    zone: "102-maktab - 1"
     rtsp: "rtsp://admin:parol400@12.14.0.35:8554/Streaming/Channels/101"
+    det_size: 1280
     mode: both
   - id: cam06
-    zone: "102-maktab"
+    zone: "102-maktab - 2"
     rtsp: "rtsp://admin:parol400@12.14.0.35:8554/Streaming/Channels/301"
     mode: both
+    det_size: 1280
 #  - id: cam04
 #    zone: "Башенный кран"
 #    rtsp: "rtsp://user:pass@192.168.100.104:554/live"
