@@ -72,20 +72,34 @@ def _enable_windows(verbose: bool) -> list[str]:
 
 def _enable_linux(verbose: bool) -> list[str]:
     """Предзагрузка CUDA .so в глобальную область, чтобы onnxruntime их разрешил."""
-    loaded = []
+    # собрать все кандидатные .so
+    candidates = []
     for d in _candidate_lib_dirs("lib"):
         for pat in _LIB_PATTERNS_LINUX:
-            for so in sorted(glob.glob(os.path.join(d, pat))):
-                try:
-                    ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
-                    loaded.append(so)
-                    if verbose:
-                        print(f"[gpu_setup] preload: {so}")
-                except OSError:
-                    pass
+            candidates += glob.glob(os.path.join(d, pat))
+    candidates = sorted(set(candidates))
+
+    # несколько проходов: .so зависят друг от друга (cudnn -> cublasLt),
+    # порядок неизвестен — повторяем, пока не перестанут появляться новые загрузки.
+    loaded = set()
+    for _ in range(4):
+        progress = False
+        for so in candidates:
+            if so in loaded:
+                continue
+            try:
+                ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
+                loaded.add(so)
+                progress = True
+                if verbose:
+                    print(f"[gpu_setup] preload: {so}")
+            except OSError:
+                pass  # зависимость ещё не загружена — попробуем в следующем проходе
+        if not progress:
+            break
     # Если pip-колёс нет (CUDA системная, напр. в Docker nvidia/cuda) — это норма,
     # onnxruntime найдёт библиотеки через системный ld.so.
-    return loaded
+    return list(loaded)
 
 
 def enable_onnx_cuda(verbose: bool = False) -> list[str]:

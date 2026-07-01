@@ -10,9 +10,18 @@
 # Проверка после установки:  python src/check_gpu.py   (должен показать CUDAExecutionProvider)
 # =============================================================================
 
-# --- ONNX Runtime GPU (CUDA 12) + совместимый CUDA-рантайм колёсами ---
-# 1.20.x — сборка под CUDA 12 (подходит T4). extras подтягивают nvidia-*-cu12.
-onnxruntime-gpu[cuda,cudnn]==1.20.1
+# --- ONNX Runtime GPU (CUDA 12) + CUDA-рантайм колёсами (ЯВНО) ---
+# 1.20.x — сборка под CUDA 12 (подходит T4, ей нужен libcublasLt.so.12 и libcudnn.so.9).
+# ВАЖНО: extras [cuda,cudnn] на части pip НЕ подтягивают nvidia-* — поэтому перечисляем
+# CUDA-колёса явно. Все cu12 взаимосовместимы по SONAME (.so.12 / .so.9).
+# gpu_setup.enable_onnx_cuda() предзагружает эти .so до импорта onnxruntime.
+onnxruntime-gpu==1.20.1
+nvidia-cuda-runtime-cu12
+nvidia-cuda-nvrtc-cu12
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+nvidia-cufft-cu12
+nvidia-curand-cu12
 
 # --- Распознавание лиц ---
 insightface==1.0.1

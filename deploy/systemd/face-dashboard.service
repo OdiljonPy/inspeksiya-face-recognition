@@ -13,7 +13,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/face-recognition
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/face-recognition/.venv/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port 8000
+ExecStart=/opt/face-recognition/.venv/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port 8085
 Restart=always
 RestartSec=5
 
