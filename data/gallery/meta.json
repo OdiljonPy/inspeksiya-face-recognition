@@ -1,12 +1,20 @@
 {
-  "next_num": 2,
+  "next_num": 3,
   "identities": [
     {
       "idx": 0,
       "label": "person_0001",
       "crop_path": "data\\gallery\\faces\\person_0001.jpg",
       "first_seen": 1782878505.3984044,
-      "last_seen": 1782879044.1040008,
+      "last_seen": 1782884238.6509488,
+      "n_emb": 8
+    },
+    {
+      "idx": 1,
+      "label": "person_0002",
+      "crop_path": "data\\gallery\\faces\\person_0002.jpg",
+      "first_seen": 1782883730.5212438,
+      "last_seen": 1782884242.133161,
       "n_emb": 8
     }
   ]

@@ -23,7 +23,7 @@ cameras:
     mode: both
   - id: cam02
     zone: "Въезд / КПП"
-    rtsp: "rtsp://admin:admin123@192.168.100.99:554/cam/realmonitor?channel=1&subtype=0"
+    rtsp: "rtsp://admin:admin123@12.6.0.8:8554/cam/realmonitor?channel=1&subtype=0"
     mode: both
 #  - id: cam03
 #    zone: "Avloniy"
