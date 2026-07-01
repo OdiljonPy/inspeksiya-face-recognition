@@ -1,0 +1,32 @@
+# Два сервиса из одного образа: распознавание (пишет) и дашборд (читает/удаляет).
+# Общий том ./data (галерея, кропы, SQLite) и конфиг ./config.
+# GPU пробрасывается через nvidia-container-toolkit.
+services:
+  recognition:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: face-anpr:latest
+    command: ["recognition"]
+    restart: unless-stopped
+    volumes:
+      - ../data:/app/data          # галерея, кропы, events.db
+      - ../config:/app/config      # cameras.yaml, settings.yaml (правишь на хосте)
+    gpus: all                      # требует nvidia-container-toolkit
+    # альтернатива для старого compose:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{capabilities: [gpu]}]
+
+  dashboard:
+    image: face-anpr:latest        # тот же образ, что собрал recognition
+    command: ["dashboard"]
+    restart: unless-stopped
+    depends_on: [recognition]
+    ports:
+      - "8000:8000"                # дашборд: http://<server-ip>:8000
+    volumes:
+      - ../data:/app/data
+      - ../config:/app/config
+    # дашборду GPU не нужен (только чтение БД/файлов и удаление)

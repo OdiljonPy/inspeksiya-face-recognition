@@ -1,0 +1,40 @@
+# =============================================================================
+# Серверная сборка (Ubuntu + Tesla T4, sm_75). Python 3.12.
+# T4 (Turing) поддерживается стандартными сборками CUDA 12 — БЕЗ плясок с sm_120.
+# torch НЕ нужен: распознавание лиц (InsightFace) и номеров (fast-alpr) работают
+# на onnxruntime. На сервере — headless (opencv-python-headless).
+#
+# CUDA userspace для onnxruntime тянется extras'ами [cuda,cudnn] (nvidia-*-cu12).
+# Драйвер NVIDIA — на хосте (у тебя уже стоит). CUDA Toolkit ставить НЕ нужно.
+#
+# Проверка после установки:  python src/check_gpu.py   (должен показать CUDAExecutionProvider)
+# =============================================================================
+
+# --- ONNX Runtime GPU (CUDA 12) + совместимый CUDA-рантайм колёсами ---
+# 1.20.x — сборка под CUDA 12 (подходит T4). extras подтягивают nvidia-*-cu12.
+onnxruntime-gpu[cuda,cudnn]==1.20.1
+
+# --- Распознавание лиц ---
+insightface==1.0.1
+faiss-cpu==1.14.3
+
+# --- Vision (headless: сервер без экрана) ---
+opencv-python-headless==4.13.0.92
+numpy==2.4.4
+
+# --- API / дашборд ---
+fastapi==0.138.0
+uvicorn[standard]==0.49.0
+starlette==1.3.1
+pydantic==2.13.4
+python-multipart==0.0.32
+Jinja2==3.1.6
+PyYAML==6.0.3
+
+# --- ANPR (автономера) ---
+fast-alpr==0.4.0
+fast-plate-ocr==1.1.0
+open-image-models==0.5.1
+rapidocr-onnxruntime==1.2.3
+shapely==2.1.2
+pyclipper==1.4.0

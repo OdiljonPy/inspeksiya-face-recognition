@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Распознавание лиц — стройплощадка</title>
+<style>
+  :root { --bg:#0f1320; --card:#1a2032; --line:#2a3350; --txt:#e6ebf5; --muted:#8a94ad;
+          --accent:#3da5ff; --new:#ff5d6c; --ok:#46d39a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family:Segoe UI, Roboto, sans-serif; font-size:14px; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; }
+  .tabs { display:flex; gap:8px; }
+  .tab { padding:7px 14px; border-radius:8px; cursor:pointer; color:var(--muted);
+         border:1px solid transparent; }
+  .tab.active { background:var(--card); color:var(--txt); border-color:var(--line); }
+  .spacer { flex:1; }
+  select { background:var(--card); color:var(--txt); border:1px solid var(--line);
+           border-radius:8px; padding:7px 10px; }
+  .muted { color:var(--muted); }
+  main { padding:18px 20px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+  tr:hover td { background:#161c2c; }
+  .thumb { width:52px; height:52px; object-fit:cover; border-radius:8px;
+           border:1px solid var(--line); background:#222; }
+  .id { font-family:Consolas, monospace; }
+  .badge { padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; }
+  .badge.new { background:rgba(255,93,108,.15); color:var(--new); }
+  .badge.seen { background:rgba(70,211,154,.12); color:var(--ok); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:12px; text-align:center; }
+  .card img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px;
+              border:1px solid var(--line); }
+  .card .label { font-family:Consolas, monospace; margin-top:8px; font-weight:700; }
+  .hidden { display:none; }
+  .empty { color:var(--muted); padding:40px; text-align:center; }
+  .del { margin-top:8px; background:rgba(255,93,108,.12); color:var(--new);
+         border:1px solid rgba(255,93,108,.35); border-radius:7px; padding:4px 10px;
+         cursor:pointer; font-size:12px; }
+  .del:hover { background:rgba(255,93,108,.25); }
+</style>
+</head>
+<body>
+<header>
+  <h1>👷 Распознавание лиц — стройплощадка</h1>
+  <div class="tabs">
+    <div class="tab active" data-tab="events" onclick="switchTab('events')">События (лица)</div>
+    <div class="tab" data-tab="gallery" onclick="switchTab('gallery')">Галерея ID</div>
+    <div class="tab" data-tab="vehicles" onclick="switchTab('vehicles')">Транспорт</div>
+  </div>
+  <div class="spacer"></div>
+  <input id="plateSearch" class="hidden" placeholder="Поиск по номеру…" oninput="loadVehicles()"
+         style="background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 10px">
+  <label class="muted">Камера:&nbsp;
+    <select id="cameraFilter" onchange="refresh()"><option value="">Все</option></select>
+  </label>
+  <span class="muted" id="status">—</span>
+</header>
+
+<main>
+  <section id="view-events">
+    <table>
+      <thead><tr>
+        <th>Лицо</th><th>Время</th><th>Камера</th><th>Зона</th>
+        <th>ID</th><th>Score</th><th>Статус</th>
+      </tr></thead>
+      <tbody id="eventsBody"></tbody>
+    </table>
+    <div id="eventsEmpty" class="empty hidden">Событий пока нет. Запусти <code>python src\main.py</code>.</div>
+  </section>
+
+  <section id="view-gallery" class="hidden">
+    <div class="grid" id="galleryGrid"></div>
+    <div id="galleryEmpty" class="empty hidden">Галерея пуста — лица появятся автоматически с камер.</div>
+  </section>
+
+  <section id="view-vehicles" class="hidden">
+    <table>
+      <thead><tr>
+        <th>Номер</th><th>Распознано</th><th>Время</th><th>Камера</th><th>Зона</th>
+        <th>Confidence</th><th>Статус</th><th></th>
+      </tr></thead>
+      <tbody id="vehiclesBody"></tbody>
+    </table>
+    <div id="vehiclesEmpty" class="empty hidden">Событий транспорта пока нет. Нужна камера с mode: plate/both.</div>
+  </section>
+</main>
+
+<script>
+let currentTab = "events";
+
+function switchTab(t) {
+  currentTab = t;
+  document.querySelectorAll(".tab").forEach(e => e.classList.toggle("active", e.dataset.tab === t));
+  document.getElementById("view-events").classList.toggle("hidden", t !== "events");
+  document.getElementById("view-gallery").classList.toggle("hidden", t !== "gallery");
+  document.getElementById("view-vehicles").classList.toggle("hidden", t !== "vehicles");
+  document.getElementById("plateSearch").classList.toggle("hidden", t !== "vehicles");
+  refresh();
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("ru-RU", {hour12:false});
+}
+
+async function loadCameras() {
+  const sel = document.getElementById("cameraFilter");
+  const cur = sel.value;
+  const cams = await (await fetch("/api/cameras")).json();
+  sel.innerHTML = '<option value="">Все</option>' +
+    cams.map(c => `<option value="${c.id}">${c.id} — ${c.zone||""}</option>`).join("");
+  sel.value = cur;
+}
+
+async function loadEvents() {
+  const cam = document.getElementById("cameraFilter").value;
+  const rows = await (await fetch("/api/events?limit=200&camera=" + encodeURIComponent(cam))).json();
+  const body = document.getElementById("eventsBody");
+  document.getElementById("eventsEmpty").classList.toggle("hidden", rows.length > 0);
+  body.innerHTML = rows.map(r => `
+    <tr>
+      <td>${r.face_url ? `<img class="thumb" src="${r.face_url}">` : "—"}</td>
+      <td>${fmtTime(r.ts)}</td>
+      <td>${r.camera_id}</td>
+      <td>${r.zone||""}</td>
+      <td class="id">${r.person}</td>
+      <td>${r.score ?? ""}</td>
+      <td>${r.is_new ? '<span class="badge new">НОВЫЙ</span>'
+                     : '<span class="badge seen">замечен</span>'}</td>
+    </tr>`).join("");
+  document.getElementById("status").textContent =
+    "событий: " + rows.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+async function loadGallery() {
+  const items = await (await fetch("/api/gallery")).json();
+  const grid = document.getElementById("galleryGrid");
+  document.getElementById("galleryEmpty").classList.toggle("hidden", items.length > 0);
+  grid.innerHTML = items.map(i => `
+    <div class="card">
+      <img src="${i.face_url}" onerror="this.style.opacity=.2">
+      <div class="label">${i.label}</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        событий: ${i.events} · ракурсов: ${i.n_emb}<br>
+        первый: ${fmtTime(i.first_seen)}
+      </div>
+      <button class="del" onclick="delPerson('${i.label}')">✕ удалить</button>
+    </div>`).join("");
+  document.getElementById("status").textContent =
+    "ID в галерее: " + items.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+async function loadVehicles() {
+  const cam = document.getElementById("cameraFilter").value;
+  const q = document.getElementById("plateSearch").value.trim();
+  const rows = await (await fetch(`/api/vehicle_events?limit=200&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}`)).json();
+  const body = document.getElementById("vehiclesBody");
+  document.getElementById("vehiclesEmpty").classList.toggle("hidden", rows.length > 0);
+  body.innerHTML = rows.map(r => {
+    const status = r.valid ? '<span class="badge seen">OK</span>'
+                 : (r.region_uncertain ? '<span class="badge new">регион?</span>'
+                                       : '<span class="badge new">невалид</span>');
+    return `<tr>
+      <td class="id" style="font-size:15px">${r.plate}</td>
+      <td>${r.plate_url ? `<img class="thumb" style="width:90px;height:34px" src="${r.plate_url}">` : "—"}</td>
+      <td>${fmtTime(r.ts)}</td>
+      <td>${r.camera_id}</td>
+      <td>${r.zone||""}</td>
+      <td>${r.confidence ?? ""}</td>
+      <td>${status}</td>
+      <td><button class="del" onclick="delVehicle('${r.plate}')">✕</button></td>
+    </tr>`;
+  }).join("");
+  document.getElementById("status").textContent =
+    "номеров: " + rows.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+async function delPerson(label) {
+  if (!confirm(`Удалить ${label} из галереи и ВСЕ его события лиц?`)) return;
+  const r = await fetch("/api/gallery/" + encodeURIComponent(label), {method: "DELETE"});
+  if (r.ok) { const d = await r.json(); loadGallery(); }
+  else { alert("Ошибка удаления: " + r.status); }
+}
+
+async function delVehicle(plate) {
+  if (!confirm(`Удалить номер ${plate} и ВСЕ его события транспорта (со снимками)?`)) return;
+  const r = await fetch("/api/vehicle/" + encodeURIComponent(plate), {method: "DELETE"});
+  if (r.ok) { loadVehicles(); }
+  else { alert("Ошибка удаления: " + r.status); }
+}
+
+function refresh() {
+  if (currentTab === "events") loadEvents();
+  else if (currentTab === "gallery") loadGallery();
+  else loadVehicles();
+}
+
+loadCameras();
+refresh();
+setInterval(() => { loadCameras(); refresh(); }, 3000);  // автообновление
+</script>
+</body>
+</html>

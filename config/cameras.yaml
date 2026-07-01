@@ -1,0 +1,57 @@
+# Конфигурация камер стройплощадки (10 шт.).
+# Заполни поле rtsp реальными адресами. id — уникальный, zone — название зоны.
+# mode — какие модули запускать на камере:
+#   face  — только распознавание лиц
+#   plate — только распознавание автономеров (ANPR)
+#   both  — и лица, и номера
+# Если mode не указан — по умолчанию "face" (старое поведение не ломается).
+#
+# Примеры RTSP по вендорам:
+#   Dahua/EZIP : rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=0   (subtype=1 — субпоток, легче)
+#   Hikvision  : rtsp://user:pass@IP:554/Streaming/Channels/101                (…/102 — субпоток)
+#   Generic    : rtsp://user:pass@IP:554/live
+#
+# Твоя проверенная камера (раскомментируй, чтобы протестировать на реальном потоке):
+#   - id: cam01
+#     zone: "Тест"
+#     rtsp: "rtsp://192.168.100.133/live"
+
+cameras:
+  - id: cam01
+    zone: "BODYCam1"
+    rtsp: "rtsp://192.168.100.133/live"
+    mode: both
+  - id: cam02
+    zone: "Въезд / КПП"
+    rtsp: "rtsp://admin:admin123@192.168.100.99:554/cam/realmonitor?channel=1&subtype=0"
+    mode: both
+#  - id: cam03
+#    zone: "Avloniy"
+#    rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/601"
+#    mode: both
+  - id: cam04
+    zone: "102-maktab"
+    rtsp: "rtsp://admin:parol400@12.14.0.35:8554/Streaming/Channels/101"
+    mode: both
+
+#  - id: cam04
+#    zone: "Башенный кран"
+#    rtsp: "rtsp://user:pass@192.168.100.104:554/live"
+#  - id: cam05
+#    zone: "Котлован"
+#    rtsp: "rtsp://user:pass@192.168.100.105:554/live"
+#  - id: cam06
+#    zone: "Этаж 1"
+#    rtsp: "rtsp://user:pass@192.168.100.106:554/live"
+#  - id: cam07
+#    zone: "Этаж 2"
+#    rtsp: "rtsp://user:pass@192.168.100.107:554/live"
+#  - id: cam08
+#    zone: "Парковка"
+#    rtsp: "rtsp://user:pass@192.168.100.108:554/live"
+#  - id: cam09
+#    zone: "Периметр север"
+#    rtsp: "rtsp://user:pass@192.168.100.109:554/live"
+#  - id: cam10
+#    zone: "Периметр юг"
+#    rtsp: "rtsp://user:pass@192.168.100.110:554/live"

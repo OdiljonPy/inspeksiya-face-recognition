@@ -1,0 +1,75 @@
+# =============================================================================
+# Face Recognition (стройплощадка) — зафиксированные версии под Python 3.14 / RTX 5060 (sm_120, Blackwell)
+# Проверено на Windows 11, NVIDIA driver 591.86 (CUDA 13.1 capable).
+#
+# ВАЖНО про порядок установки (см. README.md):
+#   1) torch/torchvision ставятся с ИНДЕКСА PyTorch cu128 (сборка под sm_120):
+#        pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+#   2) onnxruntime-gpu ставится с extras [cuda,cudnn], чтобы подтянуть CUDA 12 runtime-DLL:
+#        pip install "onnxruntime-gpu[cuda,cudnn]==1.26.0" --extra-index-url https://pypi.nvidia.com
+#      (отдельный CUDA Toolkit НЕ нужен — DLL приезжают pip-колёсами nvidia-*-cu12)
+#   3) остальное — обычной командой: pip install -r requirements.txt
+#
+# Почему именно так:
+#   - Обычный onnxruntime-gpu без CUDA-DLL падает: "cublasLt64_*.dll is missing".
+#   - 1.26.0 собран под CUDA 12 и совпадает с CUDA 12.8 у torch — единый рантайм.
+#   - sm_120 поддерживается сборкой torch cu128 (arch_list содержит sm_120).
+# =============================================================================
+
+# --- PyTorch (GPU, sm_120) — устанавливать с --index-url cu128 (см. README) ---
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+
+# --- ONNX Runtime GPU + CUDA 12 runtime (extras [cuda,cudnn] с индекса NVIDIA) ---
+onnxruntime-gpu==1.26.0
+onnx==1.22.0
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cuda-nvrtc-cu12==12.9.86
+nvidia-cuda-runtime-cu12==12.9.79
+nvidia-cudnn-cu12==9.23.2.1
+nvidia-cufft-cu12==11.4.1.4
+nvidia-curand-cu12==10.3.10.19
+nvidia-nvjitlink-cu12==12.9.86
+
+# --- Распознавание лиц ---
+insightface==1.0.1
+
+# --- Поиск по базе эмбеддингов ---
+faiss-cpu==1.14.3
+
+# --- Видео / обработка ---
+opencv-python==4.13.0.92
+numpy==2.4.4
+
+# --- API / дашборд ---
+fastapi==0.138.0
+uvicorn==0.49.0
+starlette==1.3.1
+pydantic==2.13.4
+python-multipart==0.0.32
+Jinja2==3.1.6
+
+# --- Конфиг ---
+PyYAML==6.0.3
+
+# --- ANPR (распознавание автомобильных номеров) ---
+# fast-alpr НЕ тянет свой onnxruntime — работает на onnxruntime-gpu выше (та же GPU sm_120).
+# ВНИМАНИЕ: fast-alpr тянет opencv-python-headless; после установки переустановить
+# полный opencv-python, чтобы вернуть cv2.imshow (live-окно stage1):
+#   pip install fast-alpr
+#   pip install --force-reinstall --no-deps opencv-python==4.13.0.92
+fast-alpr==0.4.0
+fast-plate-ocr==1.1.0
+open-image-models==0.5.1
+rich==15.0.0
+# (opencv-python-headless==4.13.0.92 ставится транзитивно; cv2 берётся от полного opencv-python)
+#
+# Регион узбекского номера (интерим): RapidOCR = PP-OCR модели PaddleOCR на onnxruntime.
+# paddlepaddle под Python 3.14 НЕ существует, поэтому rapidocr-onnxruntime.
+# ВНИМАНИЕ: rapidocr тянет CPU onnxruntime -> после установки восстановить GPU:
+#   pip install rapidocr-onnxruntime
+#   pip uninstall -y onnxruntime
+#   pip install --force-reinstall --no-deps onnxruntime-gpu==1.26.0
+rapidocr-onnxruntime==1.2.3
+shapely==2.1.2
+pyclipper==1.4.0

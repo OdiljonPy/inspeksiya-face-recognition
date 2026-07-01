@@ -1,0 +1,14 @@
+# ТЕСТ Этапа 4 ANPR: смешанные режимы на видеофайлах (зацикливаются).
+cameras:
+  - id: cam_face
+    zone: "Проходная (лица)"
+    rtsp: "D:/GASN/face-recognition/data/_cam_known.mp4"
+    mode: face
+  - id: cam_plate
+    zone: "Въезд (номера)"
+    rtsp: "D:/GASN/face-recognition/data/_cam_plate.mp4"
+    mode: plate
+  - id: cam_both
+    zone: "КПП (лица+номера)"
+    rtsp: "D:/GASN/face-recognition/data/_cam_both.mp4"
+    mode: both

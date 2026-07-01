@@ -1,0 +1,13 @@
+{
+  "next_num": 2,
+  "identities": [
+    {
+      "idx": 0,
+      "label": "person_0001",
+      "crop_path": "data\\gallery\\faces\\person_0001.jpg",
+      "first_seen": 1782878505.3984044,
+      "last_seen": 1782879044.1040008,
+      "n_emb": 8
+    }
+  ]
+}

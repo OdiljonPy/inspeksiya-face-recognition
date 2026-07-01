@@ -1,0 +1,14 @@
+.venv/
+**/__pycache__/
+*.pyc
+data/gallery/
+data/plates/
+data/anpr_test_out/
+data/*.mp4
+data/_*.db
+data/events.db
+events.db
+.git/
+.claude/
+*.md
+!README.md

@@ -1,0 +1,21 @@
+# systemd-юнит: FastAPI дашборд (читает БД/файлы, удаляет записи).
+# Установка:
+#   sudo cp deploy/systemd/face-dashboard.service /etc/systemd/system/
+#   отредактируй User и пути, затем:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now face-dashboard
+[Unit]
+Description=Face + ANPR dashboard (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/face-recognition
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/face-recognition/.venv/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

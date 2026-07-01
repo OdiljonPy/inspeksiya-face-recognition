@@ -1,0 +1,16 @@
+# ТЕСТОВЫЙ конфиг для проверки Этапа 3 без реальных камер.
+# 3 «камеры» на видеофайлах (зацикливаются) + 1 заведомо битый RTSP
+# для демонстрации reconnect/backoff (не должен ронять остальные).
+cameras:
+  - id: cam01
+    zone: "Въезд (known)"
+    rtsp: "D:/GASN/face-recognition/data/_cam_known.mp4"
+  - id: cam02
+    zone: "Склад (unknown)"
+    rtsp: "D:/GASN/face-recognition/data/_cam_unknown.mp4"
+  - id: cam03
+    zone: "Бытовки (known)"
+    rtsp: "D:/GASN/face-recognition/data/_cam_known.mp4"
+  - id: cam04
+    zone: "Битая камера"
+    rtsp: "rtsp://10.255.255.1:554/nonexistent"
