@@ -115,6 +115,11 @@ python src/debug_stream.py --source "rtsp://user:pass@ip:554/..." --port 8091 --
 ```
 Дебаг-стрим НЕ жмёт кадр (в отличие от `main.py`, где ресайз до 960 ради 10 камер) и
 поднимает `det_size` до 1600 — чтобы увидеть, ловятся ли лица на полном разрешении.
+
+То же самое доступно прямо в дашборде: вкладка **«Камеры (live)»** — клик по камере
+запускает живой просмотр с боксами (лениво, одна камера за раз, авто-стоп при уходе).
+Для этого дашборд-процессу нужен GPU: в Docker у сервиса `dashboard` стоит `gpus: all`;
+на bare-metal (systemd на хосте с GPU) — автоматически. Live-движок использует det_size 1280.
 Открой `http://<IP-сервера>:8091` (открой порт: `sudo ufw allow 8091/tcp`).
 В Docker: `docker compose -f deploy/docker-compose.yml run --rm -p 8091:8091 recognition \
   python src/debug_stream.py --camera cam05 --port 8091`.

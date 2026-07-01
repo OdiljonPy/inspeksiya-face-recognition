@@ -33,18 +33,24 @@ class EventLog:
                 person     TEXT    NOT NULL,
                 score      REAL,
                 is_new     INTEGER NOT NULL DEFAULT 0,
-                crop_path  TEXT
+                crop_path  TEXT,
+                full_path  TEXT              -- полный кадр события (общий вид)
             )
         """)
+        # миграция старых БД: добавить full_path, если колонки ещё нет
+        try:
+            self.conn.execute("ALTER TABLE events ADD COLUMN full_path TEXT")
+        except sqlite3.OperationalError:
+            pass
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_cam ON events(camera_id)")
         self.conn.commit()
 
     def log(self, camera_id: str, zone: str, person: str, score: float,
-            is_new: bool, crop_path: str, ts: float | None = None) -> bool:
+            is_new: bool, crop_path: str, ts: float | None = None):
         """
-        Записать событие с учётом анти-дребезга. Возвращает True, если записали.
-        Новые лица (is_new) логируются всегда.
+        Записать событие с учётом анти-дребезга. Возвращает rowid новой записи
+        или None (если задедуплено). Новые лица (is_new) логируются всегда.
         """
         if ts is None:
             ts = time.time()
@@ -53,15 +59,21 @@ class EventLog:
             if not is_new:
                 last = self._last_seen.get(key, 0.0)
                 if ts - last < self.dedup_seconds:
-                    return False
+                    return None
             self._last_seen[key] = ts
-            self.conn.execute(
+            cur = self.conn.execute(
                 "INSERT INTO events (ts, camera_id, zone, person, score, is_new, crop_path) "
                 "VALUES (?,?,?,?,?,?,?)",
                 (ts, camera_id, zone, person, float(score), 1 if is_new else 0, crop_path),
             )
             self.conn.commit()
-        return True
+            return cur.lastrowid
+
+    def set_full(self, rowid: int, full_path: str):
+        """Дописать путь к полному кадру (сохраняем только для залогированных событий)."""
+        with self.lock:
+            self.conn.execute("UPDATE events SET full_path=? WHERE id=?", (full_path, rowid))
+            self.conn.commit()
 
     def close(self):
         with self.lock:

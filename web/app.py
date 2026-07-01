@@ -16,14 +16,17 @@ web/app.py — Этап 5. FastAPI-дашборд (localhost).
 import os
 import sys
 import json
+import time
 import sqlite3
+import threading
 
-# чтобы импортировать config из src/
+# чтобы импортировать config из src/ и live из web/
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # каталог web/ (live.py)
 
 from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import load_settings, load_cameras
@@ -39,19 +42,52 @@ META_PATH = os.path.join(GALLERY_DIR, "meta.json")
 PLATES_DIR = cfg["paths"]["plates"]
 if not os.path.isabs(PLATES_DIR):
     PLATES_DIR = os.path.normpath(os.path.join(_ROOT, PLATES_DIR))
+FULL_DIR = cfg["paths"].get("full", "data/full")
+if not os.path.isabs(FULL_DIR):
+    FULL_DIR = os.path.normpath(os.path.join(_ROOT, FULL_DIR))
 TEMPLATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 
 os.makedirs(FACES_DIR, exist_ok=True)
 os.makedirs(PLATES_DIR, exist_ok=True)
+os.makedirs(FULL_DIR, exist_ok=True)
 
 app = FastAPI(title="Face Recognition + ANPR Dashboard")
-# миниатюры лиц и номеров
+# миниатюры лиц, номеров и полные кадры событий
 app.mount("/faces", StaticFiles(directory=FACES_DIR), name="faces")
 app.mount("/plates", StaticFiles(directory=PLATES_DIR), name="plates")
+app.mount("/full", StaticFiles(directory=FULL_DIR), name="full")
+
+
+@app.middleware("http")
+async def _no_cache_images(request, call_next):
+    """Запрет кэша на миниатюры: файл person_0001.jpg мог смениться на другого человека."""
+    resp = await call_next(request)
+    if request.url.path.startswith(("/faces/", "/plates/", "/full/")):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
+def _full_url(path: str) -> str:
+    return _versioned("/full", FULL_DIR, path)
+
+
+def _versioned(url_prefix: str, base_dir: str, path: str) -> str:
+    """
+    URL миниатюры с cache-busting ?v=<mtime>. Когда файл перезаписан (тот же ID —
+    другой человек), mtime меняется -> URL меняется -> браузер грузит свежую картинку.
+    """
+    if not path:
+        return ""
+    name = os.path.basename(path)
+    try:
+        v = int(os.path.getmtime(os.path.join(base_dir, name)))
+    except OSError:
+        v = 0
+    return f"{url_prefix}/{name}?v={v}"
 
 
 def _plate_url(path: str) -> str:
-    return "/plates/" + os.path.basename(path) if path else ""
+    return _versioned("/plates", PLATES_DIR, path)
 
 
 def _db():
@@ -61,10 +97,23 @@ def _db():
 
 
 def _face_url(crop_path: str) -> str:
-    """Из пути снимка делаем URL /faces/<имя>."""
-    if not crop_path:
-        return ""
-    return "/faces/" + os.path.basename(crop_path)
+    """URL миниатюры лица /faces/<имя>?v=<mtime> (см. _versioned)."""
+    return _versioned("/faces", FACES_DIR, crop_path)
+
+
+def _ensure_schema():
+    """Гарантировать колонку full_path (если БД создана старой версией кода)."""
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        with _db() as c:
+            c.execute("ALTER TABLE events ADD COLUMN full_path TEXT")
+            c.commit()
+    except sqlite3.OperationalError:
+        pass  # колонка уже есть
+
+
+_ensure_schema()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -93,7 +142,7 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
                limit: int = Query(100, ge=1, le=1000)):
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
-    q = ("SELECT id, ts, camera_id, zone, person, score, is_new, crop_path "
+    q = ("SELECT id, ts, camera_id, zone, person, score, is_new, crop_path, full_path "
          "FROM events")
     params = []
     if camera:
@@ -114,6 +163,7 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
                 "score": round(r["score"], 3) if r["score"] is not None else None,
                 "is_new": bool(r["is_new"]),
                 "face_url": _face_url(r["crop_path"]),
+                "full_url": _full_url(r["full_path"]),
             })
     return out
 
@@ -222,3 +272,57 @@ def api_delete_vehicle(plate: str):
         cur = conn.execute("DELETE FROM vehicle_events WHERE plate_normalized = ?", (plate,))
         conn.commit()
     return {"deleted": plate, "events_deleted": cur.rowcount}
+
+
+# ============================ LIVE (просмотр камеры с боксами) ============================
+_live = None
+_live_lock = threading.Lock()
+
+
+def _get_live():
+    """Ленивый LiveManager: движки грузятся при первом запросе live."""
+    global _live
+    if _live is None:
+        with _live_lock:
+            if _live is None:
+                from live import LiveManager
+                _live = LiveManager(cfg)
+    return _live
+
+
+@app.get("/live/stream/{cam_id}")
+def live_stream(cam_id: str, det: int = Query(0, description="det_size лица: 0=деф, 640/960/1280/1600")):
+    """MJPEG-поток одной камеры с боксами. Запускается по запросу (клику)."""
+    lm = _get_live()
+    if not lm.start(cam_id, det=det):
+        raise HTTPException(status_code=404, detail=f"камера {cam_id} не найдена в cameras.yaml")
+
+    def gen():
+        boundary = b"--frame"
+        while True:
+            jpg = lm.get_jpeg(cam_id)      # обновляет last_access -> watchdog держит поток
+            if jpg is not None:
+                yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/live/snapshot/{cam_id}")
+def live_snapshot(cam_id: str, det: int = Query(0)):
+    lm = _get_live()
+    if not lm.start(cam_id, det=det):
+        raise HTTPException(status_code=404, detail="камера не найдена")
+    for _ in range(50):                     # подождать первый кадр
+        jpg = lm.get_jpeg(cam_id)
+        if jpg:
+            return Response(content=jpg, media_type="image/jpeg")
+        time.sleep(0.1)
+    return Response(status_code=503)
+
+
+@app.post("/live/stop")
+def live_stop(cam_id: str = Query("")):
+    """Остановить live: конкретную камеру (cam_id) или все (пусто)."""
+    _get_live().stop(cam_id or None)
+    return {"stopped": cam_id or "all"}

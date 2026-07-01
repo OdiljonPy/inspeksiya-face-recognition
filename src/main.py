@@ -17,6 +17,8 @@ import queue
 import argparse
 import threading
 
+import cv2
+
 from config import load_settings, load_cameras
 from face_engine import FaceEngine
 from gallery import Gallery
@@ -29,18 +31,37 @@ from anpr.plate_format import PlateValidator
 from anpr.vehicle_log import VehicleLog
 
 
-def make_face_handler(event_log: EventLog, quiet: bool):
-    """Колбэк лиц: печать + запись события (с анти-дребезгом)."""
+def _save_full_frame(frame, cam_id, ts, full_dir) -> str:
+    """Сохранить полный кадр события (общий вид). Один файл на кадр."""
+    import os
+    os.makedirs(full_dir, exist_ok=True)
+    name = f"{int(ts*1000)}_{cam_id}.jpg"
+    path = os.path.join(full_dir, name)
+    cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return path
+
+
+def make_face_handler(event_log: EventLog, full_dir: str, quiet: bool):
+    """Колбэк лиц: печать + запись события (с анти-дребезгом) + полный кадр."""
     def on_result(r: FrameResult):
         if not r.faces:
             return
         lines = []
+        logged_ids = []
+        ts = time.time()
         for f in r.faces:
-            wrote = event_log.log(r.cam_id, r.zone, f.label, f.score,
-                                  f.is_new, f.crop_path, ts=time.time())
-            tag = "NEW" if f.is_new else ("LOG" if wrote else "...")
-            if f.is_new or wrote or not quiet:
+            rowid = event_log.log(r.cam_id, r.zone, f.label, f.score,
+                                  f.is_new, f.crop_path, ts=ts)
+            if rowid is not None:
+                logged_ids.append(rowid)
+            tag = "NEW" if f.is_new else ("LOG" if rowid is not None else "...")
+            if f.is_new or rowid is not None or not quiet:
                 lines.append(f"{f.label}:{f.score:.2f}[{tag}]")
+        # полный кадр сохраняем ОДИН раз на кадр и только если что-то залогировали
+        if logged_ids and r.frame is not None:
+            full_path = _save_full_frame(r.frame, r.cam_id, ts, full_dir)
+            for rid in logged_ids:
+                event_log.set_full(rid, full_path)
         if lines:
             print(f"[{r.cam_id}/{r.zone}] faces={len(r.faces)} {' '.join(lines)} "
                   f"lat={r.latency_ms:.0f}ms")
@@ -151,7 +172,7 @@ def main():
     workers = [CameraWorker(cam, q, cfg, stop_event) for cam in cameras]
     infer = InferenceWorker(
         q, face_engines, gallery, cfg, stop_event,
-        make_face_handler(event_log, args.quiet) if need_face else (lambda r: None),
+        make_face_handler(event_log, cfg["paths"]["full"], args.quiet) if need_face else (lambda r: None),
         cam_modes=modes, cam_det=cam_det, cam_width=cam_width,
         anpr_engine=anpr_engine, anpr_validator=anpr_validator,
         vehicle_log=vehicle_log, plates_dir=plates_dir,

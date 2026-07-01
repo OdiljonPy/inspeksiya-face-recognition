@@ -53,6 +53,7 @@
     <div class="tab active" data-tab="events" onclick="switchTab('events')">События (лица)</div>
     <div class="tab" data-tab="gallery" onclick="switchTab('gallery')">Галерея ID</div>
     <div class="tab" data-tab="vehicles" onclick="switchTab('vehicles')">Транспорт</div>
+    <div class="tab" data-tab="live" onclick="switchTab('live')">Камеры (live)</div>
   </div>
   <div class="spacer"></div>
   <input id="plateSearch" class="hidden" placeholder="Поиск по номеру…" oninput="loadVehicles()"
@@ -67,7 +68,7 @@
   <section id="view-events">
     <table>
       <thead><tr>
-        <th>Лицо</th><th>Время</th><th>Камера</th><th>Зона</th>
+        <th>Лицо</th><th>Кадр</th><th>Время</th><th>Камера</th><th>Зона</th>
         <th>ID</th><th>Score</th><th>Статус</th>
       </tr></thead>
       <tbody id="eventsBody"></tbody>
@@ -90,6 +91,26 @@
     </table>
     <div id="vehiclesEmpty" class="empty hidden">Событий транспорта пока нет. Нужна камера с mode: plate/both.</div>
   </section>
+
+  <section id="view-live" class="hidden">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <label class="muted">Качество (det_size):
+        <select id="liveDet" onchange="reapplyLive()">
+          <option value="640">640 (быстро)</option>
+          <option value="960">960</option>
+          <option value="1280" selected>1280</option>
+          <option value="1600">1600 (дальние)</option>
+        </select>
+      </label>
+      <button class="tab" onclick="showMosaic()">▦ Мозаика (все)</button>
+      <button class="del" onclick="stopLive()">■ Стоп</button>
+    </div>
+    <div id="liveCams" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px"></div>
+    <div id="liveHint" class="muted">Выберите камеру или «Мозаика» — live с боксами
+      (зелёный = лицо, синий = номер, оранжевый = слишком мелко/слабо).</div>
+    <img id="liveImg" style="max-width:1280px;width:100%;border:1px solid var(--line);border-radius:10px;display:none;margin-top:10px">
+    <div id="liveGrid" style="display:none;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:8px;margin-top:10px"></div>
+  </section>
 </main>
 
 <script>
@@ -101,8 +122,65 @@ function switchTab(t) {
   document.getElementById("view-events").classList.toggle("hidden", t !== "events");
   document.getElementById("view-gallery").classList.toggle("hidden", t !== "gallery");
   document.getElementById("view-vehicles").classList.toggle("hidden", t !== "vehicles");
+  document.getElementById("view-live").classList.toggle("hidden", t !== "live");
   document.getElementById("plateSearch").classList.toggle("hidden", t !== "vehicles");
+  if (t === "live") loadLiveCameras();
+  else stopLive();           // уходя со вкладки — закрыть MJPEG (освободить камеру/GPU)
   refresh();
+}
+
+let liveCamsCache = [];
+let liveMode = null;   // {type:'single', id} | {type:'mosaic'} | null
+
+async function loadLiveCameras() {
+  liveCamsCache = await (await fetch("/api/cameras")).json();
+  document.getElementById("liveCams").innerHTML = liveCamsCache.map(c =>
+    `<button class="tab" onclick="selectLiveCamera('${c.id}')">📹 ${c.id} — ${c.zone||""}</button>`
+  ).join("");
+}
+
+function liveDet() { return document.getElementById("liveDet").value; }
+
+function selectLiveCamera(id) {
+  liveMode = {type: "single", id};
+  document.getElementById("liveGrid").style.display = "none";
+  document.getElementById("liveGrid").innerHTML = "";
+  const img = document.getElementById("liveImg");
+  img.src = `/live/stream/${encodeURIComponent(id)}?det=${liveDet()}&t=${Date.now()}`;
+  img.style.display = "block";
+  document.getElementById("liveHint").textContent =
+    "Камера: " + id + " — live с боксами (первый кадр может идти пару секунд: греются модели).";
+}
+
+function showMosaic() {
+  liveMode = {type: "mosaic"};
+  document.getElementById("liveImg").style.display = "none";
+  document.getElementById("liveImg").src = "";
+  const grid = document.getElementById("liveGrid");
+  const d = liveDet();
+  grid.innerHTML = liveCamsCache.map(c =>
+    `<div><div class="muted" style="font-size:12px">${c.id} — ${c.zone||""}</div>
+     <img style="width:100%;border:1px solid var(--line);border-radius:8px"
+          src="/live/stream/${encodeURIComponent(c.id)}?det=${d}&t=${Date.now()}"></div>`
+  ).join("");
+  grid.style.display = "grid";
+  document.getElementById("liveHint").textContent =
+    `Мозаика: ${liveCamsCache.length} камер (лимит одновременных на сервере — 6). Тяжело для GPU — используй меньший det_size.`;
+}
+
+function reapplyLive() {   // смена det_size -> перезапустить текущий вид
+  if (!liveMode) return;
+  if (liveMode.type === "single") selectLiveCamera(liveMode.id);
+  else showMosaic();
+}
+
+function stopLive() {
+  liveMode = null;
+  const img = document.getElementById("liveImg");
+  if (img) { img.src = ""; img.style.display = "none"; }
+  const grid = document.getElementById("liveGrid");
+  if (grid) { grid.innerHTML = ""; grid.style.display = "none"; }
+  fetch("/live/stop", {method: "POST"}).catch(() => {});   // остановить воркеры на сервере
 }
 
 function fmtTime(ts) {
@@ -127,6 +205,7 @@ async function loadEvents() {
   body.innerHTML = rows.map(r => `
     <tr>
       <td>${r.face_url ? `<img class="thumb" src="${r.face_url}">` : "—"}</td>
+      <td>${r.full_url ? `<a href="${r.full_url}" target="_blank"><img class="thumb" style="width:96px;height:54px" src="${r.full_url}"></a>` : "—"}</td>
       <td>${fmtTime(r.ts)}</td>
       <td>${r.camera_id}</td>
       <td>${r.zone||""}</td>
@@ -199,7 +278,8 @@ async function delVehicle(plate) {
 function refresh() {
   if (currentTab === "events") loadEvents();
   else if (currentTab === "gallery") loadGallery();
-  else loadVehicles();
+  else if (currentTab === "vehicles") loadVehicles();
+  // для live периодический refresh НЕ трогает MJPEG (иначе перезапустит поток)
 }
 
 loadCameras();

@@ -12,8 +12,8 @@ recognition:
 gallery:
   dir: data/gallery               # сюда: faces/<ID>.jpg, embeddings.npy, owners.npy, meta.json
   # Двухпороговая логика (борьба с дублями ID при повороте головы):
-  match_threshold: 0.50           # score >= -> точно тот же ID (строже: меньше ложных склеек разных людей)
-  new_id_threshold: 0.40          # новый ID только если ближайший score < этого (иначе серая зона -> старый ID)
+  match_threshold: 0.50           # score >= -> точно тот же ID (СОВПАДЕНИЕ — оставляем 0.50)
+  new_id_threshold: 0.30          # новый ID ТОЛЬКО если ближайший score < 0.30 (иначе -> ближайший существующий)
   max_embeddings_per_id: 8        # сколько ракурсов (эмбеддингов) копить на один ID
   add_embedding_below: 0.9        # добавлять новый ракурс, если score в [match_threshold, add_embedding_below)
   crop_margin: 0.25               # поля вокруг лица при сохранении снимка
@@ -35,6 +35,7 @@ paths:
   index_dir: data/index           # сюда пишутся faiss.index и labels.json
   snapshots: data/snapshots       # снимки лиц событий (Этап 4)
   plates: data/plates             # кропы номеров (ANPR)
+  full: data/full                 # полные кадры событий лиц (общий вид/ракурс)
   db: data/events.db              # SQLite (всё runtime-состояние под data/ — удобно для Docker-тома)
 
 # Модуль ANPR (распознавание автомобильных номеров) на fast-alpr.
