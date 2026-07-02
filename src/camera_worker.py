@@ -38,6 +38,7 @@ class FrameItem:
     zone: str
     frame: "cv2.typing.MatLike"
     capture_ts: float          # время захвата (для сквозной задержки)
+    object_id: str = "default" # объект (стройплощадка), к которому относится камера
 
 
 @dataclass
@@ -139,7 +140,8 @@ class CameraWorker(threading.Thread):
             if not ok or frame is None:
                 continue
 
-            item = FrameItem(self.cam["id"], self.cam.get("zone", ""), frame, now)
+            item = FrameItem(self.cam["id"], self.cam.get("zone", ""), frame, now,
+                             self.cam.get("object_id", "default"))
             try:
                 self.q.put_nowait(item)
                 self.stats.frames_enqueued += 1

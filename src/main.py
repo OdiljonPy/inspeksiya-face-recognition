@@ -19,10 +19,11 @@ import threading
 
 import cv2
 
-from config import load_settings, load_cameras
+from config import load_settings, load_cameras, load_objects
 from face_engine import FaceEngine
 from gallery import Gallery
 from events import EventLog
+from objects_db import sync_objects
 from camera_worker import CameraWorker
 from inference_worker import InferenceWorker, FrameResult
 
@@ -41,27 +42,50 @@ def _save_full_frame(frame, cam_id, ts, full_dir) -> str:
     return path
 
 
-def make_face_handler(event_log: EventLog, full_dir: str, quiet: bool):
-    """Колбэк лиц: печать + запись события (с анти-дребезгом) + полный кадр."""
+def _save_face_crop(frame, bbox, cam_id, ts, out_dir) -> str:
+    """Сохранить кроп лица (для LOW_QUALITY-событий)."""
+    import os
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    h, w = frame.shape[:2]
+    pad = 6
+    crop = frame[max(0, y1 - pad):min(h, y2 + pad), max(0, x1 - pad):min(w, x2 + pad)]
+    if crop.size == 0:
+        return ""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{int(ts*1000)}_{cam_id}_{x1}_{y1}.jpg")
+    cv2.imwrite(path, crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return path
+
+
+def make_face_handler(event_log: EventLog, full_dir: str, lowq_dir: str, quiet: bool):
+    """Колбэк лиц: печать + запись события (с анти-дребезгом) + полный кадр + метрики качества."""
     def on_result(r: FrameResult):
         if not r.faces:
             return
         lines = []
-        logged_ids = []
+        logged = []                      # (rowid, FaceResult)
         ts = time.time()
         for f in r.faces:
             rowid = event_log.log(r.cam_id, r.zone, f.label, f.score,
-                                  f.is_new, f.crop_path, ts=ts)
+                                  f.is_new, f.crop_path, ts=ts,
+                                  q_det=f.q_det, q_px=f.q_px, q_blur=f.q_blur, q_yaw=f.q_yaw,
+                                  object_id=r.object_id)
             if rowid is not None:
-                logged_ids.append(rowid)
-            tag = "NEW" if f.is_new else ("LOG" if rowid is not None else "...")
+                logged.append((rowid, f))
+            tag = ("NEW" if f.is_new else
+                   ("LQ" if f.label == "LOW_QUALITY" else
+                    ("LOG" if rowid is not None else "...")))
             if f.is_new or rowid is not None or not quiet:
                 lines.append(f"{f.label}:{f.score:.2f}[{tag}]")
-        # полный кадр сохраняем ОДИН раз на кадр и только если что-то залогировали
-        if logged_ids and r.frame is not None:
+        # снимки сохраняем ОДИН раз на кадр и только для залогированных событий
+        if logged and r.frame is not None:
             full_path = _save_full_frame(r.frame, r.cam_id, ts, full_dir)
-            for rid in logged_ids:
+            for rid, f in logged:
                 event_log.set_full(rid, full_path)
+                if f.label == "LOW_QUALITY":     # у него crop пустой — пишем кроп лица
+                    cp = _save_face_crop(r.frame, f.bbox, r.cam_id, ts, lowq_dir)
+                    if cp:
+                        event_log.set_crop(rid, cp)
         if lines:
             print(f"[{r.cam_id}/{r.zone}] faces={len(r.faces)} {' '.join(lines)} "
                   f"lat={r.latency_ms:.0f}ms")
@@ -123,6 +147,11 @@ def main():
         print("Нет камер в cameras.yaml.")
         return 1
 
+    # объекты (стройплощадки): синхронизируем таблицу objects из конфига
+    objects = load_objects(args.cameras)
+    sync_objects(cfg["paths"]["db"], objects)
+    print(f"Объектов: {len(objects)} ({', '.join(o['id'] for o in objects)})")
+
     modes = {c["id"]: c.get("mode", "face") for c in cameras}
     default_det = int(cfg["recognition"]["det_size"])
     # per-camera параметры
@@ -172,7 +201,8 @@ def main():
     workers = [CameraWorker(cam, q, cfg, stop_event) for cam in cameras]
     infer = InferenceWorker(
         q, face_engines, gallery, cfg, stop_event,
-        make_face_handler(event_log, cfg["paths"]["full"], args.quiet) if need_face else (lambda r: None),
+        make_face_handler(event_log, cfg["paths"]["full"], cfg["paths"]["lowq"], args.quiet)
+        if need_face else (lambda r: None),
         cam_modes=modes, cam_det=cam_det, cam_width=cam_width,
         anpr_engine=anpr_engine, anpr_validator=anpr_validator,
         vehicle_log=vehicle_log, plates_dir=plates_dir,

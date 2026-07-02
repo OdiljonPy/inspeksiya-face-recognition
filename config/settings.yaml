@@ -7,6 +7,16 @@ recognition:
   cosine_threshold: 0.5    # порог совпадения (inner product на L2-норм. векторах = cosine)
   min_det_score: 0.4       # минимальная уверенность детекции, чтобы вообще обрабатывать лицо
 
+# Фильтр КАЧЕСТВА лица ДО распознавания (Задача 1). Отсекает профиль/размытые/мелкие
+# лица, дающие ложные совпадения. Это НЕ порог cosine — тот в gallery.match_threshold.
+face_quality:
+  enabled: true            # false -> фильтр выключен (старое поведение)
+  mode: event              # непрошедшие лица: "event" (лог person=LOW_QUALITY + снимок) | "ignore"
+  min_det_score: 0.65      # уверенность детекции SCRFD
+  min_width_px: 80         # мин. ширина лица на ИСХОДНОМ кадре, px
+  min_blur: 100.0          # резкость (variance of Laplacian); ниже — размыто
+  max_yaw_asym: 1.6        # асимметрия нос-глаза; выше — сильный профиль
+
 # Авто-галерея лиц (Этап 4): система сама присваивает каждому новому лицу
 # уникальный ID, сохраняет снимок один раз и узнаёт человека при повторной встрече.
 gallery:
@@ -36,6 +46,7 @@ paths:
   snapshots: data/snapshots       # снимки лиц событий (Этап 4)
   plates: data/plates             # кропы номеров (ANPR)
   full: data/full                 # полные кадры событий лиц (общий вид/ракурс)
+  lowq: data/lowq                 # снимки лиц низкого качества (LOW_QUALITY)
   db: data/events.db              # SQLite (всё runtime-состояние под data/ — удобно для Docker-тома)
 
 # Модуль ANPR (распознавание автомобильных номеров) на fast-alpr.

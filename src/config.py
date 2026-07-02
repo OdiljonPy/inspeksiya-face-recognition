@@ -36,15 +36,40 @@ def load_settings(path: str | None = None) -> dict:
     return cfg
 
 
+# объект по умолчанию для камер/событий без явного object_id
+DEFAULT_OBJECT_ID = "default"
+DEFAULT_OBJECT_NAME = "Объект по умолчанию"
+
+
+def _cameras_path(path):
+    return path or os.path.join(project_root(), "config", "cameras.yaml")
+
+
 def load_cameras(path: str | None = None) -> list[dict]:
-    """Загрузить cameras.yaml -> список словарей камер (Этап 3)."""
-    if path is None:
-        path = os.path.join(project_root(), "config", "cameras.yaml")
-    if not os.path.exists(path):
+    """Загрузить cameras.yaml -> список камер. У каждой гарантируем object_id (дефолт)."""
+    p = _cameras_path(path)
+    if not os.path.exists(p):
         return []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(p, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    return data.get("cameras", [])
+    cams = data.get("cameras", []) or []
+    for c in cams:
+        c.setdefault("object_id", DEFAULT_OBJECT_ID)
+    return cams
+
+
+def load_objects(path: str | None = None) -> list[dict]:
+    """Загрузить objects из cameras.yaml. Всегда включает дефолтный объект."""
+    p = _cameras_path(path)
+    objs = []
+    if os.path.exists(p):
+        with open(p, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        objs = data.get("objects", []) or []
+    ids = {o["id"] for o in objs}
+    if DEFAULT_OBJECT_ID not in ids:
+        objs.append({"id": DEFAULT_OBJECT_ID, "name": DEFAULT_OBJECT_NAME, "address": ""})
+    return objs
 
 
 # Удобные пути к артефактам индекса

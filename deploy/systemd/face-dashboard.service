@@ -10,10 +10,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
+User=root
 WorkingDirectory=/root/inspeksiya-face-recognition
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/root/inspeksiya-face-recognition/.venv/bin/python3 -m uvicorn web.app:app --host 0.0.0.0 --port 8089
+ExecStart=/root/inspeksiya-face-recognition/.venv/bin/python3 -m uvicorn web.app:app --host 0.0.0.0 --port 8089 --app-dir /root/inspeksiya-face-recognition
 Restart=always
 RestartSec=5
 

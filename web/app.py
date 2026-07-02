@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from config import load_settings, load_cameras
+from config import load_settings, load_cameras, load_objects
 from gallery import Gallery
 
 cfg = load_settings()
@@ -122,32 +122,61 @@ def index():
         return f.read()
 
 
+@app.get("/api/objects")
+def api_objects():
+    """Список объектов (стройплощадок) для фильтра."""
+    objs = []
+    if os.path.exists(DB_PATH):
+        with _db() as conn:
+            try:
+                for r in conn.execute("SELECT id, name, address FROM objects ORDER BY name"):
+                    objs.append({"id": r["id"], "name": r["name"] or r["id"],
+                                 "address": r["address"] or ""})
+            except sqlite3.OperationalError:
+                pass
+    if not objs:                              # fallback из конфига
+        for o in load_objects():
+            objs.append({"id": o["id"], "name": o.get("name", o["id"]),
+                         "address": o.get("address", "")})
+    return objs
+
+
 @app.get("/api/cameras")
-def api_cameras():
-    """Список камер для фильтра: из cameras.yaml + те, что реально встречались в событиях."""
-    cams = {c["id"]: c.get("zone", "") for c in load_cameras()}
+def api_cameras(object: str = Query("", description="фильтр по объекту")):
+    """Камеры для фильтра (+ object_id). Если задан object — только его камеры."""
+    cams = {}
+    for c in load_cameras():
+        cams[c["id"]] = {"zone": c.get("zone", ""), "object_id": c.get("object_id", "default")}
     if os.path.exists(DB_PATH):
         with _db() as conn:
             for tbl in ("events", "vehicle_events"):
                 try:
-                    for r in conn.execute(f"SELECT DISTINCT camera_id, zone FROM {tbl}"):
-                        cams.setdefault(r["camera_id"], r["zone"] or "")
+                    for r in conn.execute(f"SELECT DISTINCT camera_id, zone, object_id FROM {tbl}"):
+                        cams.setdefault(r["camera_id"], {"zone": r["zone"] or "",
+                                                         "object_id": r["object_id"] or "default"})
                 except sqlite3.OperationalError:
-                    pass  # таблицы может ещё не быть
-    return [{"id": k, "zone": v} for k, v in cams.items()]
+                    pass
+    out = [{"id": k, "zone": v["zone"], "object_id": v["object_id"]} for k, v in cams.items()]
+    if object:
+        out = [c for c in out if c["object_id"] == object]
+    return out
 
 
 @app.get("/api/events")
 def api_events(camera: str = Query("", description="фильтр по camera_id"),
+               object: str = Query("", description="фильтр по объекту"),
                limit: int = Query(100, ge=1, le=1000)):
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
     q = ("SELECT id, ts, camera_id, zone, person, score, is_new, crop_path, full_path "
          "FROM events")
-    params = []
+    where, params = [], []
     if camera:
-        q += " WHERE camera_id = ?"
-        params.append(camera)
+        where.append("camera_id = ?"); params.append(camera)
+    if object:
+        where.append("object_id = ?"); params.append(object)
+    if where:
+        q += " WHERE " + " AND ".join(where)
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
 
@@ -170,6 +199,7 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
 
 @app.get("/api/vehicle_events")
 def api_vehicle_events(camera: str = Query("", description="фильтр по camera_id"),
+                       object: str = Query("", description="фильтр по объекту"),
                        q: str = Query("", description="поиск по номеру (подстрока)"),
                        limit: int = Query(100, ge=1, le=1000)):
     if not os.path.exists(DB_PATH):
@@ -179,6 +209,8 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
+    if object:
+        where.append("object_id = ?"); params.append(object)
     if q:
         where.append("plate_normalized LIKE ?"); params.append(f"%{q.upper()}%")
     if where:
@@ -203,21 +235,32 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
 
 
 @app.get("/api/gallery")
-def api_gallery():
-    """Все уникальные ID из meta.json + счётчик событий по каждому."""
+def api_gallery(object: str = Query("", description="фильтр по объекту")):
+    """Уникальные ID из meta.json + счётчик событий. object -> только те, кто там появлялся."""
     if not os.path.exists(META_PATH):
         return []
     with open(META_PATH, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
     counts = {}
+    on_object = None            # множество label, появлявшихся на объекте
     if os.path.exists(DB_PATH):
         with _db() as conn:
             for r in conn.execute("SELECT person, COUNT(*) c FROM events GROUP BY person"):
                 counts[r["person"]] = r["c"]
+            if object:
+                on_object = set()
+                try:
+                    for r in conn.execute(
+                            "SELECT DISTINCT person FROM events WHERE object_id = ?", (object,)):
+                        on_object.add(r["person"])
+                except sqlite3.OperationalError:
+                    on_object = None
 
     out = []
     for idn in meta.get("identities", []):
+        if on_object is not None and idn["label"] not in on_object:
+            continue            # на этом объекте не появлялся
         out.append({
             "label": idn["label"],
             "face_url": _face_url(idn["crop_path"]),
@@ -272,6 +315,94 @@ def api_delete_vehicle(plate: str):
         cur = conn.execute("DELETE FROM vehicle_events WHERE plate_normalized = ?", (plate,))
         conn.commit()
     return {"deleted": plate, "events_deleted": cur.rowcount}
+
+
+# ============================ АНАЛИТИКА (Задача 3) ============================
+_PERIODS = {"day": 86400, "week": 7 * 86400, "month": 30 * 86400}
+_UNIDENT = ("Unknown", "LOW_QUALITY")   # неопознанные (уникальность не определяется)
+
+
+def _object_names() -> dict:
+    names = {}
+    if os.path.exists(DB_PATH):
+        with _db() as conn:
+            try:
+                for r in conn.execute("SELECT id, name FROM objects"):
+                    names[r["id"]] = r["name"] or r["id"]
+            except sqlite3.OperationalError:
+                pass
+    for o in load_objects():
+        names.setdefault(o["id"], o.get("name", o["id"]))
+    return names
+
+
+@app.get("/api/analytics")
+def api_analytics(period: str = Query("day"), object: str = Query("")):
+    """
+    По каждому объекту за период: уникальных ЛЮДЕЙ (distinct ID, без Unknown/LOW_QUALITY)
+    и число событий Неопознанных (уникальность неизвестных не определяется).
+    """
+    if not os.path.exists(DB_PATH):
+        return {"period": period, "rows": []}
+    frm = time.time() - _PERIODS.get(period, _PERIODS["day"])
+    ph = ",".join("?" * len(_UNIDENT))
+    sql = (f"SELECT object_id, "
+           f"COUNT(DISTINCT CASE WHEN person NOT IN ({ph}) THEN person END) AS uniq, "
+           f"SUM(CASE WHEN person IN ({ph}) THEN 1 ELSE 0 END) AS unident "
+           f"FROM events WHERE ts >= ?")
+    params = list(_UNIDENT) + list(_UNIDENT) + [frm]
+    if object:
+        sql += " AND object_id = ?"; params.append(object)
+    sql += " GROUP BY object_id"
+    names = _object_names()
+    rows = []
+    with _db() as conn:
+        for r in conn.execute(sql, params):
+            rows.append({"object_id": r["object_id"],
+                         "object_name": names.get(r["object_id"], r["object_id"]),
+                         "unique_people": r["uniq"] or 0,
+                         "unidentified": r["unident"] or 0})
+    rows.sort(key=lambda x: -x["unique_people"])
+    return {"period": period, "rows": rows}
+
+
+@app.get("/api/person/{label}")
+def api_person(label: str, period: str = Query("month")):
+    """Карточка человека: объекты появления, всего, по дням, последние снимки."""
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(status_code=404, detail="нет базы")
+    frm = time.time() - _PERIODS.get(period, _PERIODS["month"])
+    names = _object_names()
+
+    # снимок из галереи
+    face_url = ""
+    if os.path.exists(META_PATH):
+        with open(META_PATH, "r", encoding="utf-8") as f:
+            for idn in json.load(f).get("identities", []):
+                if idn["label"] == label:
+                    face_url = _face_url(idn["crop_path"]); break
+
+    with _db() as conn:
+        by_object = [{"object_id": r["object_id"],
+                      "object_name": names.get(r["object_id"], r["object_id"]),
+                      "count": r["c"]}
+                     for r in conn.execute(
+                         "SELECT object_id, COUNT(*) c FROM events WHERE person=? AND ts>=? "
+                         "GROUP BY object_id ORDER BY c DESC", (label, frm))]
+        total = sum(o["count"] for o in by_object)
+        by_day = [{"day": r["d"], "count": r["c"]}
+                  for r in conn.execute(
+                      "SELECT date(ts,'unixepoch','localtime') d, COUNT(*) c FROM events "
+                      "WHERE person=? AND ts>=? GROUP BY d ORDER BY d", (label, frm))]
+        last = [{"ts": r["ts"], "camera_id": r["camera_id"], "zone": r["zone"],
+                 "object_id": r["object_id"],
+                 "object_name": names.get(r["object_id"], r["object_id"]),
+                 "face_url": _face_url(r["crop_path"]), "full_url": _full_url(r["full_path"])}
+                for r in conn.execute(
+                    "SELECT ts, camera_id, zone, object_id, crop_path, full_path FROM events "
+                    "WHERE person=? ORDER BY ts DESC LIMIT 12", (label,))]
+    return {"label": label, "period": period, "face_url": face_url, "total": total,
+            "by_object": by_object, "by_day": by_day, "last": last}
 
 
 # ============================ LIVE (просмотр камеры с боксами) ============================

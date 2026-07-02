@@ -38,16 +38,23 @@ class VehicleLog:
                 confidence       REAL,
                 snapshot_path    TEXT,
                 valid            INTEGER NOT NULL DEFAULT 0,  -- соответствует формату РУз
-                region_uncertain INTEGER NOT NULL DEFAULT 0  -- интерим: регион ненадёжен
+                region_uncertain INTEGER NOT NULL DEFAULT 0, -- интерим: регион ненадёжен
+                object_id        TEXT DEFAULT 'default'      -- объект/стройплощадка (Задача 2)
             )
         """)
+        # миграция старых БД (идемпотентно)
+        try:
+            self.conn.execute("ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'")
+        except sqlite3.OperationalError:
+            pass
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_ts ON vehicle_events(timestamp)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_cam ON vehicle_events(camera_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_plate ON vehicle_events(plate_normalized)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_obj ON vehicle_events(object_id)")
         self.conn.commit()
 
     def log(self, camera_id, zone, plate_text, plate_normalized, confidence,
-            snapshot_path, dedup_key, valid, region_uncertain, ts=None):
+            snapshot_path, dedup_key, valid, region_uncertain, ts=None, object_id="default"):
         """
         Записать событие с анти-дребезгом по (camera_id, dedup_key).
         Возвращает rowid новой записи или None (если задедуплено).
@@ -62,10 +69,10 @@ class VehicleLog:
             self._last_seen[key] = ts
             cur = self.conn.execute(
                 "INSERT INTO vehicle_events (timestamp, camera_id, zone, plate_text, "
-                "plate_normalized, confidence, snapshot_path, valid, region_uncertain) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "plate_normalized, confidence, snapshot_path, valid, region_uncertain, object_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (ts, camera_id, zone, plate_text, plate_normalized, float(confidence),
-                 snapshot_path, 1 if valid else 0, 1 if region_uncertain else 0),
+                 snapshot_path, 1 if valid else 0, 1 if region_uncertain else 0, object_id),
             )
             self.conn.commit()
             return cur.lastrowid

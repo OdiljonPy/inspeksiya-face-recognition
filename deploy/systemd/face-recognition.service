@@ -10,7 +10,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
+User=root
 # путь, куда склонирован/скопирован проект:
 WorkingDirectory=/root/inspeksiya-face-recognition
 Environment=PYTHONUNBUFFERED=1

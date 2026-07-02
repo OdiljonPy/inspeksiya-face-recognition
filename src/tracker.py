@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from gallery import Gallery, frontality
 from results import FaceResult
+from face_quality import FaceQuality
 
 
 def _iou(a, b) -> float:
@@ -51,10 +52,14 @@ class CameraTracker:
         self.iou_thr = float(gg["track_iou"])
         self.max_misses = int(gg["track_max_misses"])
         self.confirm = int(gg["new_id_confirm_frames"])
+        self.fq = FaceQuality(cfg)         # фильтр качества (Задача 1)
+        self._scale = 1.0                  # коэффициент ресайза кадра (для размера в исходных px)
         self.tracks: list[_Track] = []
 
-    def update(self, faces, frame, ts) -> list:
-        """faces — список insightface Face (bbox, normed_embedding, det_score, kps)."""
+    def update(self, faces, frame, ts, scale: float = 1.0) -> list:
+        """faces — список insightface Face (bbox, normed_embedding, det_score, kps).
+        scale — frame_w/original_w (чтобы мерить размер лица в исходных пикселях)."""
+        self._scale = scale
         dets = [tuple(int(v) for v in f.bbox) for f in faces]
 
         # --- связывание детекций с существующими треками (жадно по IoU) ---
@@ -105,8 +110,14 @@ class CameraTracker:
 
     def _decide(self, t: _Track, f, frame, ts):
         emb = f.normed_embedding
+        # оценка качества один раз на лицо (метрики идут во все события)
+        q = self.fq.assess(f, frame, self._scale)
 
-        # 1) Трек уже знает свою личность -> держим ID, доучиваем ракурсы
+        def fr(label, score, is_new, crop):
+            return FaceResult(t.bbox, label, score, is_new, crop,
+                              q.det_score, q.width_px, q.blur, q.yaw_asym)
+
+        # 1) Трек уже знает свою личность -> держим ID (FAISS-гейт не применяем)
         if t.label is not None:
             own = self.g.get_by_label(t.label)
             if own is None:
@@ -117,7 +128,14 @@ class CameraTracker:
                 ident, score = self.g.identify(emb)
                 if frontality(f.kps) >= self.g.min_frontality:
                     self.g.maybe_add_embedding(own, emb, score, ts)
-                return FaceResult(t.bbox, t.label, score, False, t.crop_path)
+                return fr(t.label, score, False, t.crop_path)
+
+        # ★ ФИЛЬТР КАЧЕСТВА — перед FAISS, только для НЕопознанных лиц ★
+        if self.fq.enabled and not q.passed:
+            if self.fq.mode == "ignore":
+                return None
+            # mode == "event": фиксируем как LOW_QUALITY (снимок пишется при логировании)
+            return fr("LOW_QUALITY", 0.0, False, "")
 
         # 2) Личность ещё не присвоена — ищем в галерее
         ident, score = self.g.identify(emb)
@@ -127,7 +145,7 @@ class CameraTracker:
             t.label = ident.label
             t.crop_path = ident.crop_path
             self.g.maybe_add_embedding(ident, emb, score, ts)
-            return FaceResult(t.bbox, ident.label, score, False, ident.crop_path)
+            return fr(ident.label, score, False, ident.crop_path)
 
         # 3) Ниже порога. Можно ли это качественный кандидат в НОВЫЙ ID?
         good = self.g.quality_ok_for_new(float(getattr(f, "det_score", 0.0)), t.bbox, f.kps, frame)
@@ -137,11 +155,10 @@ class CameraTracker:
                 ident = self.g.add_new(emb, frame, f.bbox, ts)
                 t.label = ident.label
                 t.crop_path = ident.crop_path
-                return FaceResult(t.bbox, ident.label, score, True, ident.crop_path)
+                return fr(ident.label, score, True, ident.crop_path)
             return None  # ещё не подтверждён — ничего не выдаём (не мигаем)
 
-        # 4) «Серая зона» или плохое качество: НЕ заводим новый ID.
-        #    Если рядом есть существующий — отдаём его (стабильнее), иначе ждём.
+        # 4) «Серая зона»: НЕ заводим новый ID. Если рядом есть существующий — отдаём его.
         if ident is not None and score >= self.g.new_id_threshold:
-            return FaceResult(t.bbox, ident.label, score, False, ident.crop_path)
+            return fr(ident.label, score, False, ident.crop_path)
         return None

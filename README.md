@@ -20,6 +20,64 @@ T4 (sm_75) поддерживается стандартным CUDA 12 без п
 `deploy/setup_ubuntu.sh` + `deploy/systemd/*.service` (bare-metal), плюс
 `deploy/preload_models.py` (предзагрузка моделей с зеркал) и `requirements-linux.txt`.
 
+## Аналитика (дашборд)
+Вкладка **«Аналитика»**: по каждому объекту за период (Сутки/Неделя/Месяц) —
+количество уникальных людей (по распознанному ID) и число неопознанных событий
+(Unknown/LOW_QUALITY, их уникальность не определяется). Клик по ID человека (в
+галерее или событиях) открывает **карточку**: на каких объектах появлялся, сколько
+раз, график появлений по дням и последние появления со снимками. Агрегация ускорена
+композитными индексами (`object_id+ts`, `person+ts`).
+
+## Объекты (стройплощадки)
+Камеры группируются по объектам. В `config/cameras.yaml` — верхний уровень `objects`
+и поле `object_id` у каждой камеры:
+```yaml
+objects:
+  - id: obj_avloniy
+    name: "Avloniy"
+    address: ""
+cameras:
+  - id: cam03
+    object_id: obj_avloniy      # к какому объекту относится камера
+    zone: "Avloniy - 1"
+    rtsp: "..."
+```
+Камеры без `object_id` попадают в объект `default`. В SQLite — таблица `objects` и
+колонка `object_id` в `events` и `vehicle_events`. Дашборд фильтрует по объекту на
+всех страницах (события, галерея, транспорт, live); список камер показывает только
+камеры выбранного объекта.
+
+**Миграция БД** (объекты + backfill существующих событий, без потери данных):
+```powershell
+python scripts\migrate_objects.py
+```
+
+## Фильтр качества лица (борьба с ложными распознаваниями)
+Перед поиском в FAISS каждое НЕопознанное лицо проходит фильтр качества
+([src/face_quality.py](src/face_quality.py)) — отсекает профиль/размытые/мелкие лица,
+дающие ложные совпадения. Пороги — в `config/settings.yaml`, секция `face_quality`:
+```yaml
+face_quality:
+  enabled: true          # false -> выключить фильтр
+  mode: event            # непрошедшие: "event" (лог person=LOW_QUALITY + снимок) | "ignore"
+  min_det_score: 0.65    # уверенность детекции SCRFD
+  min_width_px: 80       # мин. ширина лица на ИСХОДНОМ кадре, px
+  min_blur: 100.0        # резкость (variance of Laplacian)
+  max_yaw_asym: 1.6      # асимметрия нос-глаза (>1.6 -> сильный профиль)
+```
+Метрики каждого события пишутся в БД (`q_det, q_px, q_blur, q_yaw`) — для подбора порогов.
+Снимки LOW_QUALITY — в `data/lowq/`.
+
+**Подбор порогов по реальным кадрам:**
+```powershell
+python src\tune_quality.py --dir data\lowq         # печатает метрики + PASS/FAIL каждого лица
+python src\tune_quality.py --dir <папка> --save    # + размеченные кадры в data\quality_out
+```
+**Миграция БД** (добавить колонки метрик в существующую базу без потери данных):
+```powershell
+python scripts\migrate_quality_columns.py
+```
+
 ## Установка на Windows 11 (dev-машина)
 
 ### Предусловия

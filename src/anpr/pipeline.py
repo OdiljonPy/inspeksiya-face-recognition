@@ -19,7 +19,7 @@ def _safe_name(s: str) -> str:
 
 
 def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
-                  plates_dir, min_conf, ts=None, save_crop=True) -> list[dict]:
+                  plates_dir, min_conf, ts=None, save_crop=True, object_id="default") -> list[dict]:
     """
     Прогнать кадр через ANPR. Для каждого номера выше порога:
       - разобрать (регион/тело, флаги),
@@ -45,6 +45,7 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
             plate_normalized=pp.normalized, confidence=p.ocr_conf,
             snapshot_path="", dedup_key=dedup_key,
             valid=pp.valid, region_uncertain=pp.region_uncertain, ts=ts,
+            object_id=object_id,
         ) if vlog is not None else None
         logged = rowid is not None
 

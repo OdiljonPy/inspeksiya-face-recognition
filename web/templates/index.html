@@ -54,10 +54,14 @@
     <div class="tab" data-tab="gallery" onclick="switchTab('gallery')">Галерея ID</div>
     <div class="tab" data-tab="vehicles" onclick="switchTab('vehicles')">Транспорт</div>
     <div class="tab" data-tab="live" onclick="switchTab('live')">Камеры (live)</div>
+    <div class="tab" data-tab="analytics" onclick="switchTab('analytics')">Аналитика</div>
   </div>
   <div class="spacer"></div>
   <input id="plateSearch" class="hidden" placeholder="Поиск по номеру…" oninput="loadVehicles()"
          style="background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 10px">
+  <label class="muted">Объект:&nbsp;
+    <select id="objectFilter" onchange="onObjectChange()"><option value="">Все объекты</option></select>
+  </label>
   <label class="muted">Камера:&nbsp;
     <select id="cameraFilter" onchange="refresh()"><option value="">Все</option></select>
   </label>
@@ -111,6 +115,40 @@
     <img id="liveImg" style="max-width:1280px;width:100%;border:1px solid var(--line);border-radius:10px;display:none;margin-top:10px">
     <div id="liveGrid" style="display:none;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:8px;margin-top:10px"></div>
   </section>
+
+  <section id="view-analytics" class="hidden">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <span class="muted">Период:</span>
+      <button class="tab" data-period="day" onclick="setPeriod('day')">Сутки</button>
+      <button class="tab" data-period="week" onclick="setPeriod('week')">Неделя</button>
+      <button class="tab" data-period="month" onclick="setPeriod('month')">Месяц</button>
+    </div>
+    <table>
+      <thead><tr><th>Объект</th><th>Уникальных людей</th><th>Неопознанные (событий)</th></tr></thead>
+      <tbody id="analyticsBody"></tbody>
+    </table>
+    <div class="muted" style="margin-top:10px;font-size:12px">
+      «Уникальные люди» — по распознанному ID. «Неопознанные» — события Unknown/LOW_QUALITY;
+      их уникальность не определяется (считается число событий).
+    </div>
+  </section>
+
+  <section id="view-person" class="hidden">
+    <button class="tab" onclick="backFromPerson()">← Назад</button>
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-top:12px;flex-wrap:wrap">
+      <img id="personFace" class="thumb" style="width:120px;height:120px">
+      <div>
+        <div class="id" id="personName" style="font-size:20px"></div>
+        <div class="muted" id="personTotal" style="margin-top:6px"></div>
+      </div>
+    </div>
+    <h3 style="margin:16px 0 6px">Появления по дням</h3>
+    <div id="personChart" style="overflow-x:auto"></div>
+    <h3 style="margin:16px 0 6px">По объектам</h3>
+    <table><thead><tr><th>Объект</th><th>Появлений</th></tr></thead><tbody id="personObjects"></tbody></table>
+    <h3 style="margin:16px 0 6px">Последние появления</h3>
+    <div class="grid" id="personLast"></div>
+  </section>
 </main>
 
 <script>
@@ -118,22 +156,94 @@ let currentTab = "events";
 
 function switchTab(t) {
   currentTab = t;
-  document.querySelectorAll(".tab").forEach(e => e.classList.toggle("active", e.dataset.tab === t));
+  document.querySelectorAll(".tab[data-tab]").forEach(e => e.classList.toggle("active", e.dataset.tab === t));
   document.getElementById("view-events").classList.toggle("hidden", t !== "events");
   document.getElementById("view-gallery").classList.toggle("hidden", t !== "gallery");
   document.getElementById("view-vehicles").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("view-live").classList.toggle("hidden", t !== "live");
+  document.getElementById("view-analytics").classList.toggle("hidden", t !== "analytics");
+  document.getElementById("view-person").classList.add("hidden");   // карточка — только по клику
   document.getElementById("plateSearch").classList.toggle("hidden", t !== "vehicles");
   if (t === "live") loadLiveCameras();
   else stopLive();           // уходя со вкладки — закрыть MJPEG (освободить камеру/GPU)
   refresh();
 }
 
+// ---------- Аналитика ----------
+let analyticsPeriod = "day";
+
+function setPeriod(p) {
+  analyticsPeriod = p;
+  document.querySelectorAll("#view-analytics .tab[data-period]")
+    .forEach(e => e.classList.toggle("active", e.dataset.period === p));
+  loadAnalytics();
+}
+
+async function loadAnalytics() {
+  const obj = currentObject();
+  const d = await (await fetch(`/api/analytics?period=${analyticsPeriod}&object=${encodeURIComponent(obj)}`)).json();
+  document.getElementById("analyticsBody").innerHTML = (d.rows || []).map(r => `
+    <tr>
+      <td>${r.object_name}</td>
+      <td style="font-size:18px;font-weight:700">${r.unique_people}</td>
+      <td class="muted">${r.unidentified}</td>
+    </tr>`).join("") || `<tr><td colspan="3" class="muted">Нет данных за период</td></tr>`;
+  document.getElementById("status").textContent =
+    "аналитика · период: " + analyticsPeriod + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+// ---------- Карточка человека ----------
+let prevTab = "gallery";
+
+async function openPerson(label) {
+  if (label === "LOW_QUALITY" || label === "Unknown") return;   // неопознанных не открываем
+  prevTab = currentTab;
+  ["events","gallery","vehicles","live","analytics"].forEach(v =>
+    document.getElementById("view-"+v).classList.add("hidden"));
+  document.getElementById("view-person").classList.remove("hidden");
+  const d = await (await fetch(`/api/person/${encodeURIComponent(label)}?period=month`)).json();
+  document.getElementById("personName").textContent = d.label;
+  document.getElementById("personFace").src = d.face_url || "";
+  document.getElementById("personTotal").textContent = `Всего появлений за месяц: ${d.total}`;
+  document.getElementById("personObjects").innerHTML = (d.by_object||[]).map(o =>
+    `<tr><td>${o.object_name}</td><td>${o.count}</td></tr>`).join("")
+    || `<tr><td colspan="2" class="muted">—</td></tr>`;
+  document.getElementById("personChart").innerHTML = dayChartSVG(d.by_day||[]);
+  document.getElementById("personLast").innerHTML = (d.last||[]).map(e => `
+    <div class="card">
+      <img src="${e.full_url || e.face_url}" onerror="this.style.opacity=.2">
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        ${e.object_name} · ${e.camera_id}<br>${fmtTime(e.ts)}
+      </div>
+    </div>`).join("") || `<div class="muted">—</div>`;
+}
+
+function backFromPerson() {
+  document.getElementById("view-person").classList.add("hidden");
+  switchTab(prevTab);
+}
+
+function dayChartSVG(days) {
+  if (!days.length) return '<span class="muted">нет появлений</span>';
+  const w = Math.max(300, days.length * 34), h = 140, pad = 24;
+  const max = Math.max(...days.map(d => d.count), 1);
+  const bw = 24;
+  let bars = "";
+  days.forEach((d, i) => {
+    const bh = (h - pad - 16) * d.count / max;
+    const x = pad + i * 34, y = h - pad - bh;
+    bars += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="#3da5ff" rx="3"></rect>`;
+    bars += `<text x="${x+bw/2}" y="${y-4}" fill="#e6ebf5" font-size="11" text-anchor="middle">${d.count}</text>`;
+    bars += `<text x="${x+bw/2}" y="${h-8}" fill="#8a94ad" font-size="9" text-anchor="middle">${d.day.slice(5)}</text>`;
+  });
+  return `<svg width="${w}" height="${h}">${bars}</svg>`;
+}
+
 let liveCamsCache = [];
 let liveMode = null;   // {type:'single', id} | {type:'mosaic'} | null
 
 async function loadLiveCameras() {
-  liveCamsCache = await (await fetch("/api/cameras")).json();
+  liveCamsCache = await (await fetch("/api/cameras?object=" + encodeURIComponent(currentObject()))).json();
   document.getElementById("liveCams").innerHTML = liveCamsCache.map(c =>
     `<button class="tab" onclick="selectLiveCamera('${c.id}')">📹 ${c.id} — ${c.zone||""}</button>`
   ).join("");
@@ -188,18 +298,37 @@ function fmtTime(ts) {
   return d.toLocaleString("ru-RU", {hour12:false});
 }
 
+function currentObject() { return document.getElementById("objectFilter").value; }
+
+async function loadObjects() {
+  const sel = document.getElementById("objectFilter");
+  const cur = sel.value;
+  const objs = await (await fetch("/api/objects")).json();
+  sel.innerHTML = '<option value="">Все объекты</option>' +
+    objs.map(o => `<option value="${o.id}">${o.name}</option>`).join("");
+  sel.value = cur;
+}
+
 async function loadCameras() {
   const sel = document.getElementById("cameraFilter");
   const cur = sel.value;
-  const cams = await (await fetch("/api/cameras")).json();
+  const cams = await (await fetch("/api/cameras?object=" + encodeURIComponent(currentObject()))).json();
   sel.innerHTML = '<option value="">Все</option>' +
     cams.map(c => `<option value="${c.id}">${c.id} — ${c.zone||""}</option>`).join("");
-  sel.value = cur;
+  // если прежняя камера не входит в выбранный объект — сбрасываем на "Все"
+  sel.value = cams.some(c => c.id === cur) ? cur : "";
+}
+
+async function onObjectChange() {   // смена объекта -> перечитать список камер (его) и обновить вид
+  await loadCameras();
+  if (currentTab === "live") loadLiveCameras();
+  refresh();
 }
 
 async function loadEvents() {
   const cam = document.getElementById("cameraFilter").value;
-  const rows = await (await fetch("/api/events?limit=200&camera=" + encodeURIComponent(cam))).json();
+  const rows = await (await fetch("/api/events?limit=200&camera=" + encodeURIComponent(cam) +
+                                  "&object=" + encodeURIComponent(currentObject()))).json();
   const body = document.getElementById("eventsBody");
   document.getElementById("eventsEmpty").classList.toggle("hidden", rows.length > 0);
   body.innerHTML = rows.map(r => `
@@ -209,7 +338,7 @@ async function loadEvents() {
       <td>${fmtTime(r.ts)}</td>
       <td>${r.camera_id}</td>
       <td>${r.zone||""}</td>
-      <td class="id">${r.person}</td>
+      <td class="id" style="cursor:pointer;text-decoration:underline" onclick="openPerson('${r.person}')">${r.person}</td>
       <td>${r.score ?? ""}</td>
       <td>${r.is_new ? '<span class="badge new">НОВЫЙ</span>'
                      : '<span class="badge seen">замечен</span>'}</td>
@@ -219,13 +348,13 @@ async function loadEvents() {
 }
 
 async function loadGallery() {
-  const items = await (await fetch("/api/gallery")).json();
+  const items = await (await fetch("/api/gallery?object=" + encodeURIComponent(currentObject()))).json();
   const grid = document.getElementById("galleryGrid");
   document.getElementById("galleryEmpty").classList.toggle("hidden", items.length > 0);
   grid.innerHTML = items.map(i => `
     <div class="card">
       <img src="${i.face_url}" onerror="this.style.opacity=.2">
-      <div class="label">${i.label}</div>
+      <div class="label" style="cursor:pointer;text-decoration:underline" onclick="openPerson('${i.label}')">${i.label}</div>
       <div class="muted" style="font-size:12px;margin-top:6px">
         событий: ${i.events} · ракурсов: ${i.n_emb}<br>
         первый: ${fmtTime(i.first_seen)}
@@ -239,7 +368,7 @@ async function loadGallery() {
 async function loadVehicles() {
   const cam = document.getElementById("cameraFilter").value;
   const q = document.getElementById("plateSearch").value.trim();
-  const rows = await (await fetch(`/api/vehicle_events?limit=200&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}`)).json();
+  const rows = await (await fetch(`/api/vehicle_events?limit=200&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}`)).json();
   const body = document.getElementById("vehiclesBody");
   document.getElementById("vehiclesEmpty").classList.toggle("hidden", rows.length > 0);
   body.innerHTML = rows.map(r => {
@@ -279,12 +408,15 @@ function refresh() {
   if (currentTab === "events") loadEvents();
   else if (currentTab === "gallery") loadGallery();
   else if (currentTab === "vehicles") loadVehicles();
+  else if (currentTab === "analytics") loadAnalytics();
   // для live периодический refresh НЕ трогает MJPEG (иначе перезапустит поток)
 }
 
+document.querySelector('#view-analytics .tab[data-period="day"]').classList.add("active");
+loadObjects();
 loadCameras();
 refresh();
-setInterval(() => { loadCameras(); refresh(); }, 3000);  // автообновление
+setInterval(() => { loadObjects(); loadCameras(); refresh(); }, 3000);  // автообновление
 </script>
 </body>
 </html>

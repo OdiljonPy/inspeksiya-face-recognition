@@ -92,11 +92,12 @@ class InferenceWorker(threading.Thread):
                 # per-camera ресайз (0 = без ресайза, нативное); det_size задаёт движок
                 w = self.cam_width.get(item.cam_id, 0)
                 frame = item.frame
+                scale = 1.0                       # frame_w/original_w (для размера лица в исходных px)
                 if w and w > 0 and frame.shape[1] > w:
-                    frame, _ = resize_to_width(frame, w)
+                    frame, scale = resize_to_width(frame, w)
                 faces = engine.detect(frame)
                 faces = [f for f in faces if float(getattr(f, "det_score", 0.0)) >= self.min_det]
-                results = self._tracker(item.cam_id).update(faces, frame, item.capture_ts)
+                results = self._tracker(item.cam_id).update(faces, frame, item.capture_ts, scale)
                 now = time.time()
                 infer_ms = (now - t0) * 1000
                 self.infer_ms_ema = infer_ms if self.infer_ms_ema == 0 else \
@@ -105,7 +106,7 @@ class InferenceWorker(threading.Thread):
                 self.on_result(FrameResult(
                     cam_id=item.cam_id, zone=item.zone, faces=results,
                     infer_ms=infer_ms, latency_ms=(now - item.capture_ts) * 1000,
-                    frame=frame,
+                    frame=frame, object_id=item.object_id,
                 ))
 
             # -------- НОМЕРА (ANPR) --------
@@ -114,7 +115,7 @@ class InferenceWorker(threading.Thread):
                 plate_res = process_frame(
                     self.anpr_engine, self.anpr_validator, self.vehicle_log,
                     item.frame, item.cam_id, item.zone, self.plates_dir,
-                    self.anpr_min_conf, ts=item.capture_ts,
+                    self.anpr_min_conf, ts=item.capture_ts, object_id=item.object_id,
                 )
                 now = time.time()
                 infer_ms = (now - t0) * 1000
