@@ -110,10 +110,12 @@ class CameraTracker:
 
     def _decide(self, t: _Track, f, frame, ts):
         emb = f.normed_embedding
-        # оценка качества один раз на лицо (метрики идут во все события)
-        q = self.fq.assess(f, frame, self._scale)
+        # фильтр качества считаем ТОЛЬКО если включён (иначе поведение как до Задачи 1)
+        q = self.fq.assess(f, frame, self._scale) if self.fq.enabled else None
 
         def fr(label, score, is_new, crop):
+            if q is None:
+                return FaceResult(t.bbox, label, score, is_new, crop)
             return FaceResult(t.bbox, label, score, is_new, crop,
                               q.det_score, q.width_px, q.blur, q.yaw_asym)
 
@@ -130,8 +132,8 @@ class CameraTracker:
                     self.g.maybe_add_embedding(own, emb, score, ts)
                 return fr(t.label, score, False, t.crop_path)
 
-        # ★ ФИЛЬТР КАЧЕСТВА — перед FAISS, только для НЕопознанных лиц ★
-        if self.fq.enabled and not q.passed:
+        # ★ ФИЛЬТР КАЧЕСТВА — перед FAISS, только для НЕопознанных лиц (если включён) ★
+        if q is not None and not q.passed:
             if self.fq.mode == "ignore":
                 return None
             # mode == "event": фиксируем как LOW_QUALITY (снимок пишется при логировании)
