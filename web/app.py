@@ -45,24 +45,29 @@ if not os.path.isabs(PLATES_DIR):
 FULL_DIR = cfg["paths"].get("full", "data/full")
 if not os.path.isabs(FULL_DIR):
     FULL_DIR = os.path.normpath(os.path.join(_ROOT, FULL_DIR))
+LOWQ_DIR = cfg["paths"].get("lowq", "data/lowq")
+if not os.path.isabs(LOWQ_DIR):
+    LOWQ_DIR = os.path.normpath(os.path.join(_ROOT, LOWQ_DIR))
 TEMPLATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 
 os.makedirs(FACES_DIR, exist_ok=True)
 os.makedirs(PLATES_DIR, exist_ok=True)
 os.makedirs(FULL_DIR, exist_ok=True)
+os.makedirs(LOWQ_DIR, exist_ok=True)
 
 app = FastAPI(title="Face Recognition + ANPR Dashboard")
-# миниатюры лиц, номеров и полные кадры событий
+# миниатюры лиц, номеров, полные кадры и снимки LOW_QUALITY
 app.mount("/faces", StaticFiles(directory=FACES_DIR), name="faces")
 app.mount("/plates", StaticFiles(directory=PLATES_DIR), name="plates")
 app.mount("/full", StaticFiles(directory=FULL_DIR), name="full")
+app.mount("/lowq", StaticFiles(directory=LOWQ_DIR), name="lowq")
 
 
 @app.middleware("http")
 async def _no_cache_images(request, call_next):
     """Запрет кэша на миниатюры: файл person_0001.jpg мог смениться на другого человека."""
     resp = await call_next(request)
-    if request.url.path.startswith(("/faces/", "/plates/", "/full/")):
+    if request.url.path.startswith(("/faces/", "/plates/", "/full/", "/lowq/")):
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
 
@@ -97,8 +102,19 @@ def _db():
 
 
 def _face_url(crop_path: str) -> str:
-    """URL миниатюры лица /faces/<имя>?v=<mtime> (см. _versioned)."""
+    """
+    URL миниатюры лица. LOW_QUALITY-снимки лежат в data/lowq, снимки ID — в
+    data/gallery/faces. Маршрутизируем по фактической папке файла.
+    """
+    if not crop_path:
+        return ""
+    name = os.path.basename(crop_path)
+    norm = crop_path.replace("\\", "/")
+    if "/lowq/" in norm or os.path.exists(os.path.join(LOWQ_DIR, name)):
+        return _versioned("/lowq", LOWQ_DIR, crop_path)
     return _versioned("/faces", FACES_DIR, crop_path)
+
+
 
 
 def _ensure_schema():
