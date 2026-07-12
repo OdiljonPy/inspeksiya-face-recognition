@@ -10,6 +10,10 @@
 #   det_size — вход детектора лиц: 640 (ближние, быстро) / 1280–1600 (дальние 4K, точнее, дороже)
 #   fps      — сколько кадров/сек обрабатывать на этой камере (2–4)
 #   width    — ресайз кадра по ширине перед детекцией (0/не указано = без ресайза)
+#   roi      — [x1, y1, x2, y2] в пикселях ИСХОДНОГО кадра: обрабатывать только эту зону
+#              (проход/ворота). Кроп подаётся и в лица, и в ANPR. Даёт мелким лицам больше
+#              эффективных пикселей детектора при меньшем det_size. Подобрать по стоп-кадру
+#              из debug_stream. Пример: roi: [800, 300, 2600, 1500]
 # Дальним 4K-камерам ставь det_size повыше; бюджет GPU проверяй debug_stream'ом.
 #
 # Примеры RTSP по вендорам:
@@ -42,32 +46,32 @@ cameras:
 #    mode: both
 
   - id: cam03
-    object_id: avloniy
+    object_id: obj_avloniy
     zone: "Avloniy - 1"
     rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/601"
     mode: both
     det_size: 1600
   - id: cam04
-    object_id: avloniy
+    object_id: obj_avloniy
     zone: "Avloniy - 2"
     rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/101"
     mode: both
     det_size: 1600
   - id: cam05
-    object_id: avloniy
+    object_id: obj_avloniy
     zone: "Avloniy - 3"
     rtsp: "rtsp://admin:qwerty11@12.14.0.30:8554/Streaming/Channels/301"
     mode: both
     det_size: 1600
 
   - id: cam06
-    object_id: 102maktab
+    object_id: obj_102maktab
     zone: "102-maktab - 1"
     rtsp: "rtsp://admin:parol400@12.14.0.35:8554/Streaming/Channels/101"
     det_size: 1600
     mode: both
   - id: cam07
-    object_id: 102maktab
+    object_id: obj_102maktab
     zone: "102-maktab - 2"
     rtsp: "rtsp://admin:parol400@12.14.0.35:8554/Streaming/Channels/301"
     mode: both

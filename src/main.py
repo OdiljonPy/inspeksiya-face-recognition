@@ -69,7 +69,7 @@ def make_face_handler(event_log: EventLog, full_dir: str, lowq_dir: str, quiet: 
             rowid = event_log.log(r.cam_id, r.zone, f.label, f.score,
                                   f.is_new, f.crop_path, ts=ts,
                                   q_det=f.q_det, q_px=f.q_px, q_blur=f.q_blur, q_yaw=f.q_yaw,
-                                  object_id=r.object_id)
+                                  object_id=r.object_id, uncertain=f.uncertain)
             if rowid is not None:
                 logged.append((rowid, f))
             tag = ("NEW" if f.is_new else
@@ -157,6 +157,7 @@ def main():
     # per-camera параметры
     cam_det = {c["id"]: int(c.get("det_size", default_det)) for c in cameras}
     cam_width = {c["id"]: int(c.get("width", 0)) for c in cameras}   # 0 = без ресайза
+    cam_roi = {c["id"]: c["roi"] for c in cameras if c.get("roi")}   # зона обработки
     need_face = any(m in ("face", "both") for m in modes.values())
     need_anpr = any(m in ("plate", "both") for m in modes.values())
     print(f"Камер: {len(cameras)}. Режимы: "
@@ -186,14 +187,21 @@ def main():
         print(f"  лица GPU={any_gpu}, движков={len(face_engines)}, ID в галерее={gallery.count()}")
 
     # --- ANPR (если есть plate/both) ---
-    anpr_engine = anpr_validator = vehicle_log = None
+    anpr_engine = anpr_validator = vehicle_log = region_ocr = None
     plates_dir = cfg["paths"]["plates"]
+    veh_full_dir = None
     if need_anpr:
         print("Инициализация движка ANPR...")
         anpr_engine = AnprEngine(cfg)
         anpr_validator = PlateValidator(cfg["anpr"]["plate_regex"])
         vehicle_log = VehicleLog(cfg["paths"]["db"], dedup_seconds=cfg["anpr"]["dedup_seconds"])
-        print(f"  ANPR GPU={anpr_engine.on_gpu}")
+        if cfg["anpr"].get("save_full_frame", True):
+            veh_full_dir = cfg["paths"]["full"]
+        if cfg["anpr"].get("region_ocr", False):
+            from anpr.region_ocr import RegionOCR
+            region_ocr = RegionOCR()
+        print(f"  ANPR GPU={anpr_engine.on_gpu}"
+              f" region_ocr={'on' if region_ocr and region_ocr.ok else 'off'}")
 
     q = queue.Queue(maxsize=args.queue_size)
     stop_event = threading.Event()
@@ -203,10 +211,11 @@ def main():
         q, face_engines, gallery, cfg, stop_event,
         make_face_handler(event_log, cfg["paths"]["full"], cfg["paths"]["lowq"], args.quiet)
         if need_face else (lambda r: None),
-        cam_modes=modes, cam_det=cam_det, cam_width=cam_width,
+        cam_modes=modes, cam_det=cam_det, cam_width=cam_width, cam_roi=cam_roi,
         anpr_engine=anpr_engine, anpr_validator=anpr_validator,
         vehicle_log=vehicle_log, plates_dir=plates_dir,
         on_plate=make_plate_handler(args.quiet) if need_anpr else None,
+        veh_full_dir=veh_full_dir, region_ocr=region_ocr,
     )
     stats_t = threading.Thread(target=stats_printer,
                                args=(workers, infer, q, gallery, vehicle_log, stop_event),

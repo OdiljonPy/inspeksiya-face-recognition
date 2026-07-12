@@ -54,6 +54,9 @@ class Gallery:
         self.crop_margin = float(g["crop_margin"])
         self.new_id_min_det = float(g["new_id_min_det_score"])
         self.new_id_min_px = int(g["new_id_min_face_px"])
+        # крупные лица почти не бывают ложными -> det-порог мягче
+        self.large_face_px = int(g.get("new_id_large_face_px", 100))
+        self.large_face_det = float(g.get("new_id_large_face_det", self.new_id_min_det))
         self.min_frontality = float(g["new_id_min_frontality"])
         self.min_blur = float(g["new_id_min_blur"])
         self.dim = dim
@@ -181,12 +184,31 @@ class Gallery:
         self.save()
         return ident
 
-    def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, score: float, ts: float):
-        """Добавить ещё один ракурс, если их мало и кадр достаточно «другой»."""
+    def own_score(self, ident: Identity, emb: np.ndarray) -> float:
+        """Похожесть эмбеддинга на СВОИ эмбеддинги этого человека (max cosine)."""
+        rows = self.embeddings[self.owners == ident.idx]
+        if rows.shape[0] == 0:
+            return 0.0
+        return float(np.max(rows @ emb.reshape(-1)))
+
+    def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, ts: float,
+                            quality_ok: bool = True):
+        """
+        Добавить ещё один ракурс. Защита от «отравления» галереи:
+          - quality_ok: кадр прошёл те же гейты качества, что и для нового ID
+            (плохой кадр может удерживать ID трека, но в базу не попадает);
+          - похожесть на СВОИ эмбеддинги >= match_threshold (раньше сравнивали
+            с глобальным ближайшим — чужой мусор попадал в ID и «слипал» людей);
+          - < add_below: слишком похожий ракурс не даёт новой информации.
+        """
         ident.last_seen = ts
-        if ident.n_emb < self.max_emb and score < self.add_below:
-            self._append_embedding(ident.idx, emb)
-            self.save()
+        if not quality_ok or ident.n_emb >= self.max_emb:
+            return
+        s = self.own_score(ident, emb)
+        if s < self.match_threshold or s >= self.add_below:
+            return
+        self._append_embedding(ident.idx, emb)
+        self.save()
 
     def get_by_label(self, label: str):
         for i in self.identities:
@@ -236,21 +258,33 @@ class Gallery:
             self.save()
             return label
 
-    def quality_ok_for_new(self, det_score: float, bbox, kps, frame) -> bool:
+    def quality_ok_for_new(self, det_score: float, bbox, kps, frame,
+                           scale: float = 1.0) -> bool:
         """
         Можно ли по этому лицу заводить НОВЫЙ ID? Требуем:
         уверенную детекцию, крупный размер, фронтальность (не профиль), резкость.
+        scale — frame_w/original_w: размер лица меряем в ИСХОДНЫХ пикселях.
+        Det-порог адаптивный: мелким лицам строго (ложные детекции почти всегда
+        мелкие), крупным — мягче (new_id_large_face_det).
         """
-        if det_score < self.new_id_min_det:
-            return False
         x1, y1, x2, y2 = bbox
-        if min(x2 - x1, y2 - y1) < self.new_id_min_px:
+        px = min(x2 - x1, y2 - y1) / max(scale, 1e-6)
+        if px < self.new_id_min_px:
+            return False
+        need_det = self.large_face_det if px >= self.large_face_px else self.new_id_min_det
+        if det_score < need_det:
             return False
         if frontality(kps) < self.min_frontality:
             return False
         if self.min_blur > 0:
-            crop = self._crop_face(frame, bbox)
-            if crop is None or blur_var(crop) < self.min_blur:
+            # резкость меряем по ТЕСНОМУ bbox (как face_quality.py): кроп с полями
+            # (_crop_face) добавляет гладкий фон и занижает дисперсию Лапласиана
+            h, w = frame.shape[:2]
+            cx1, cy1 = max(0, int(x1)), max(0, int(y1))
+            cx2, cy2 = min(w, int(x2)), min(h, int(y2))
+            if cx2 <= cx1 or cy2 <= cy1:
+                return False
+            if blur_var(frame[cy1:cy2, cx1:cx2]) < self.min_blur:
                 return False
         return True
 

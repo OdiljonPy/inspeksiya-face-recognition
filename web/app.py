@@ -25,7 +25,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # каталог web/ (live.py)
 
-from fastapi import FastAPI, Query, HTTPException
+from datetime import datetime
+
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -118,15 +120,19 @@ def _face_url(crop_path: str) -> str:
 
 
 def _ensure_schema():
-    """Гарантировать колонку full_path (если БД создана старой версией кода)."""
+    """Гарантировать новые колонки (если БД создана старой версией кода)."""
     if not os.path.exists(DB_PATH):
         return
-    try:
-        with _db() as c:
-            c.execute("ALTER TABLE events ADD COLUMN full_path TEXT")
-            c.commit()
-    except sqlite3.OperationalError:
-        pass  # колонка уже есть
+    with _db() as c:
+        for stmt in ("ALTER TABLE events ADD COLUMN full_path TEXT",
+                     "ALTER TABLE events ADD COLUMN uncertain INTEGER NOT NULL DEFAULT 0",
+                     "ALTER TABLE vehicle_events ADD COLUMN full_path TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'"):
+            try:
+                c.execute(stmt)
+                c.commit()
+            except sqlite3.OperationalError:
+                pass  # колонка/таблица уже есть или таблицы ещё нет
 
 
 _ensure_schema()
@@ -184,8 +190,8 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
                limit: int = Query(100, ge=1, le=1000)):
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
-    q = ("SELECT id, ts, camera_id, zone, person, score, is_new, crop_path, full_path "
-         "FROM events")
+    q = ("SELECT id, ts, camera_id, zone, person, score, is_new, crop_path, full_path, "
+         "uncertain FROM events")
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
@@ -207,6 +213,7 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
                 "person": r["person"],
                 "score": round(r["score"], 3) if r["score"] is not None else None,
                 "is_new": bool(r["is_new"]),
+                "uncertain": bool(r["uncertain"]),
                 "face_url": _face_url(r["crop_path"]),
                 "full_url": _full_url(r["full_path"]),
             })
@@ -221,7 +228,7 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
     sql = ("SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
-           "confidence, snapshot_path, valid, region_uncertain FROM vehicle_events")
+           "confidence, snapshot_path, valid, region_uncertain, full_path FROM vehicle_events")
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
@@ -243,6 +250,7 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "plate_text": r["plate_text"], "plate": r["plate_normalized"],
                     "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
                     "plate_url": _plate_url(r["snapshot_path"]),
+                    "full_url": _full_url(r["full_path"]),
                     "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
                 })
     except sqlite3.OperationalError:
@@ -419,6 +427,216 @@ def api_person(label: str, period: str = Query("month")):
                     "WHERE person=? ORDER BY ts DESC LIMIT 12", (label,))]
     return {"label": label, "period": period, "face_url": face_url, "total": total,
             "by_object": by_object, "by_day": by_day, "last": last}
+
+
+# ==================== API ИНТЕГРАЦИИ (v1) — для внешних систем ====================
+# По object_id: список событий лиц (/api/v1/faces), уникальные люди (/api/v1/persons)
+# и события транспорта (/api/v1/vehicles). Все — с фильтрами и фильтром по дате.
+# Даты: unix timestamp, "YYYY-MM-DD" или "YYYY-MM-DDTHH:MM:SS" (локальное время сервера).
+# URL снимков — абсолютные (можно открывать с другого хоста).
+
+def _parse_ts(s: str, end_of_day: bool = False) -> float | None:
+    """Строка даты из query -> unix ts. Пустая строка -> None (фильтр не задан)."""
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        return float(s)                      # unix timestamp
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if fmt == "%Y-%m-%d" and end_of_day:
+                # date_to без времени = включительно весь день
+                dt = dt.replace(hour=23, minute=59, second=59)
+            return dt.timestamp()
+        except ValueError:
+            continue
+    raise HTTPException(status_code=422,
+                        detail=f"неверный формат даты: {s!r} "
+                               "(ожидается unix ts, YYYY-MM-DD или YYYY-MM-DDTHH:MM:SS)")
+
+
+def _iso(ts) -> str:
+    return datetime.fromtimestamp(ts).isoformat(sep=" ", timespec="seconds") if ts else ""
+
+
+def _abs(request: Request, rel_url: str) -> str:
+    """Относительный URL снимка -> абсолютный (для внешних потребителей API)."""
+    return (str(request.base_url).rstrip("/") + rel_url) if rel_url else ""
+
+
+def _gallery_face_urls() -> dict:
+    """label -> относительный URL снимка из галереи."""
+    out = {}
+    if os.path.exists(META_PATH):
+        with open(META_PATH, "r", encoding="utf-8") as f:
+            for idn in json.load(f).get("identities", []):
+                out[idn["label"]] = _face_url(idn["crop_path"])
+    return out
+
+
+@app.get("/api/v1/faces")
+def api_v1_faces(request: Request,
+                 object_id: str = Query("", description="фильтр по объекту"),
+                 camera_id: str = Query("", description="фильтр по камере"),
+                 person: str = Query("", description="фильтр по ID человека (person_0001)"),
+                 date_from: str = Query("", description="unix ts | YYYY-MM-DD | YYYY-MM-DDTHH:MM:SS"),
+                 date_to: str = Query("", description="то же; YYYY-MM-DD — включительно"),
+                 exclude_uncertain: int = Query(0, description="1 = убрать события «серой зоны»"),
+                 exclude_unidentified: int = Query(0, description="1 = убрать Unknown/LOW_QUALITY"),
+                 limit: int = Query(100, ge=1, le=1000),
+                 offset: int = Query(0, ge=0)):
+    """API 1: события ЛИЦ. Сортировка — новые сверху. total — всего под фильтром."""
+    if not os.path.exists(DB_PATH):
+        return {"total": 0, "limit": limit, "offset": offset, "items": []}
+    where, params = [], []
+    if object_id:
+        where.append("object_id = ?"); params.append(object_id)
+    if camera_id:
+        where.append("camera_id = ?"); params.append(camera_id)
+    if person:
+        where.append("person = ?"); params.append(person)
+    frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
+    if frm is not None:
+        where.append("ts >= ?"); params.append(frm)
+    if to is not None:
+        where.append("ts <= ?"); params.append(to)
+    if exclude_uncertain:
+        where.append("uncertain = 0")
+    if exclude_unidentified:
+        ph = ",".join("?" * len(_UNIDENT))
+        where.append(f"person NOT IN ({ph})"); params.extend(_UNIDENT)
+    cond = (" WHERE " + " AND ".join(where)) if where else ""
+    names = _object_names()
+    with _db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM events{cond}", params).fetchone()[0]
+        rows = conn.execute(
+            "SELECT id, ts, camera_id, zone, person, score, is_new, uncertain, "
+            f"crop_path, full_path, object_id FROM events{cond} "
+            "ORDER BY ts DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
+    items = [{
+        "id": r["id"], "ts": r["ts"], "datetime": _iso(r["ts"]),
+        "object_id": r["object_id"],
+        "object_name": names.get(r["object_id"], r["object_id"]),
+        "camera_id": r["camera_id"], "zone": r["zone"],
+        "person": r["person"],
+        "score": round(r["score"], 3) if r["score"] is not None else None,
+        "is_new": bool(r["is_new"]), "uncertain": bool(r["uncertain"]),
+        "face_url": _abs(request, _face_url(r["crop_path"])),
+        "full_url": _abs(request, _full_url(r["full_path"])),
+    } for r in rows]
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/api/v1/persons")
+def api_v1_persons(request: Request,
+                   object_id: str = Query("", description="фильтр по объекту"),
+                   date_from: str = Query(""), date_to: str = Query(""),
+                   limit: int = Query(100, ge=1, le=1000),
+                   offset: int = Query(0, ge=0)):
+    """API 1а: УНИКАЛЬНЫЕ люди на объекте за период (агрегация событий по person)."""
+    if not os.path.exists(DB_PATH):
+        return {"total": 0, "limit": limit, "offset": offset, "items": []}
+    ph = ",".join("?" * len(_UNIDENT))
+    where, params = [f"person NOT IN ({ph})"], list(_UNIDENT)
+    if object_id:
+        where.append("object_id = ?"); params.append(object_id)
+    frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
+    if frm is not None:
+        where.append("ts >= ?"); params.append(frm)
+    if to is not None:
+        where.append("ts <= ?"); params.append(to)
+    cond = " WHERE " + " AND ".join(where)
+    faces = _gallery_face_urls()
+    with _db() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(DISTINCT person) FROM events{cond}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT person, COUNT(*) events, MIN(ts) first_seen, MAX(ts) last_seen, "
+            f"GROUP_CONCAT(DISTINCT camera_id) cams FROM events{cond} "
+            "GROUP BY person ORDER BY last_seen DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]).fetchall()
+    items = [{
+        "person": r["person"], "events": r["events"],
+        "first_seen": r["first_seen"], "first_seen_dt": _iso(r["first_seen"]),
+        "last_seen": r["last_seen"], "last_seen_dt": _iso(r["last_seen"]),
+        "cameras": (r["cams"] or "").split(","),
+        "face_url": _abs(request, faces.get(r["person"], "")),
+    } for r in rows]
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/api/v1/vehicles")
+def api_v1_vehicles(request: Request,
+                    object_id: str = Query("", description="фильтр по объекту"),
+                    camera_id: str = Query("", description="фильтр по камере"),
+                    plate: str = Query("", description="поиск по номеру (подстрока)"),
+                    valid: str = Query("", description="'1' — только валидные РУз, '0' — только невалидные"),
+                    date_from: str = Query(""), date_to: str = Query(""),
+                    limit: int = Query(100, ge=1, le=1000),
+                    offset: int = Query(0, ge=0)):
+    """API 2: события ТРАНСПОРТА. region/body разбираются из номера на лету."""
+    if not os.path.exists(DB_PATH):
+        return {"total": 0, "limit": limit, "offset": offset, "items": []}
+    where, params = [], []
+    if object_id:
+        where.append("object_id = ?"); params.append(object_id)
+    if camera_id:
+        where.append("camera_id = ?"); params.append(camera_id)
+    if plate:
+        where.append("plate_normalized LIKE ?"); params.append(f"%{plate.upper()}%")
+    if valid in ("0", "1"):
+        where.append("valid = ?"); params.append(int(valid))
+    frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
+    if frm is not None:
+        where.append("timestamp >= ?"); params.append(frm)
+    if to is not None:
+        where.append("timestamp <= ?"); params.append(to)
+    cond = (" WHERE " + " AND ".join(where)) if where else ""
+    names = _object_names()
+    try:
+        with _db() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM vehicle_events{cond}", params).fetchone()[0]
+            rows = conn.execute(
+                "SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
+                f"confidence, snapshot_path, full_path, valid, region_uncertain, object_id "
+                f"FROM vehicle_events{cond} "
+                "ORDER BY timestamp DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
+    except sqlite3.OperationalError:
+        return {"total": 0, "limit": limit, "offset": offset, "items": []}   # таблицы ещё нет
+    items = []
+    for r in rows:
+        pp = _plate_validator().parse(r["plate_normalized"] or "")
+        items.append({
+            "id": r["id"], "ts": r["timestamp"], "datetime": _iso(r["timestamp"]),
+            "object_id": r["object_id"],
+            "object_name": names.get(r["object_id"], r["object_id"]),
+            "camera_id": r["camera_id"], "zone": r["zone"],
+            "plate": pp.normalized or r["plate_normalized"],
+            "plate_raw": r["plate_text"],
+            "region": pp.region, "body": pp.body,
+            "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
+            "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
+            "plate_url": _abs(request, _plate_url(r["snapshot_path"])),
+            "full_url": _abs(request, _full_url(r["full_path"])),
+        })
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+_PLATE_VALIDATOR = None
+
+
+def _plate_validator():
+    """Ленивый PlateValidator (разбор region/body в API транспорта)."""
+    global _PLATE_VALIDATOR
+    if _PLATE_VALIDATOR is None:
+        from anpr.plate_format import PlateValidator
+        _PLATE_VALIDATOR = PlateValidator(cfg["anpr"]["plate_regex"])
+    return _PLATE_VALIDATOR
 
 
 # ============================ LIVE (просмотр камеры с боксами) ============================

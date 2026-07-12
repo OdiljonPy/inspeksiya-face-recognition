@@ -39,13 +39,15 @@ class EventLog:
                 q_px       REAL,
                 q_blur     REAL,
                 q_yaw      REAL,
-                object_id  TEXT DEFAULT 'default'  -- объект/стройплощадка (Задача 2)
+                object_id  TEXT DEFAULT 'default', -- объект/стройплощадка (Задача 2)
+                uncertain  INTEGER NOT NULL DEFAULT 0 -- «серая зона» матчинга (ID ненадёжен)
             )
         """)
         # миграция старых БД: добавить недостающие колонки (идемпотентно)
         for col, typ in (("full_path", "TEXT"), ("q_det", "REAL"), ("q_px", "REAL"),
                          ("q_blur", "REAL"), ("q_yaw", "REAL"),
-                         ("object_id", "TEXT DEFAULT 'default'")):
+                         ("object_id", "TEXT DEFAULT 'default'"),
+                         ("uncertain", "INTEGER NOT NULL DEFAULT 0")):
             try:
                 self.conn.execute(f"ALTER TABLE events ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -61,7 +63,8 @@ class EventLog:
 
     def log(self, camera_id: str, zone: str, person: str, score: float,
             is_new: bool, crop_path: str, ts: float | None = None,
-            q_det=None, q_px=None, q_blur=None, q_yaw=None, object_id: str = "default"):
+            q_det=None, q_px=None, q_blur=None, q_yaw=None, object_id: str = "default",
+            uncertain: bool = False):
         """
         Записать событие с учётом анти-дребезга. Возвращает rowid новой записи
         или None (если задедуплено). Новые лица (is_new) логируются всегда.
@@ -78,9 +81,10 @@ class EventLog:
             self._last_seen[key] = ts
             cur = self.conn.execute(
                 "INSERT INTO events (ts, camera_id, zone, person, score, is_new, crop_path, "
-                "q_det, q_px, q_blur, q_yaw, object_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "q_det, q_px, q_blur, q_yaw, object_id, uncertain) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, camera_id, zone, person, float(score), 1 if is_new else 0, crop_path,
-                 q_det, q_px, q_blur, q_yaw, object_id),
+                 q_det, q_px, q_blur, q_yaw, object_id, 1 if uncertain else 0),
             )
             self.conn.commit()
             return cur.lastrowid

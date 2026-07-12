@@ -19,12 +19,15 @@ def _safe_name(s: str) -> str:
 
 
 def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
-                  plates_dir, min_conf, ts=None, save_crop=True, object_id="default") -> list[dict]:
+                  plates_dir, min_conf, ts=None, save_crop=True, object_id="default",
+                  full_dir=None, region_ocr=None, min_plate_px=0) -> list[dict]:
     """
     Прогнать кадр через ANPR. Для каждого номера выше порога:
       - разобрать (регион/тело, флаги),
       - сохранить кроп номера в plates_dir (если save_crop),
-      - залогировать с анти-дребезгом по ТЕЛУ номера.
+      - залогировать с анти-дребезгом по ТЕЛУ номера,
+      - для НОВЫХ событий: полный кадр в full_dir (если задан) и, при битом
+        регионе, второй OCR-проход регион-бокса (region_ocr).
     Возвращает список словарей с результатами (для печати/дашборда).
     """
     if ts is None:
@@ -33,6 +36,9 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
     plates = engine.predict(frame)
     for p in plates:
         if p.ocr_conf < min_conf:
+            continue
+        # слишком мелкий номер — уверенный мусор OCR, не логируем
+        if min_plate_px and p.bbox and (p.bbox[2] - p.bbox[0]) < min_plate_px:
             continue
         pp = validator.parse(p.text)
         # ключ дедупа — надёжное тело номера (регион может «плавать»)
@@ -50,21 +56,40 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
         logged = rowid is not None
 
         snapshot_path = ""
-        if logged and save_crop and p.bbox:
+        normalized, valid, region_uncertain = pp.normalized, pp.valid, pp.region_uncertain
+        region = pp.region
+        if logged and p.bbox:
             x1, y1, x2, y2 = p.bbox
             h, w = frame.shape[:2]
             pad = 6
             crop = frame[max(0, y1 - pad):min(h, y2 + pad), max(0, x1 - pad):min(w, x2 + pad)]
             if crop.size:
-                os.makedirs(plates_dir, exist_ok=True)
-                fname = f"{int(ts*1000)}_{cam_id}_{_safe_name(pp.normalized)}.jpg"
-                snapshot_path = os.path.join(plates_dir, fname)
-                cv2.imwrite(snapshot_path, crop)
-                vlog.set_snapshot(rowid, snapshot_path)
+                # регион всё ещё битый -> второй OCR-проход по регион-боксу (дёшево:
+                # только для новых событий, единицы вызовов в минуту)
+                if region_uncertain and pp.body and region_ocr is not None and region_ocr.ok:
+                    reg = region_ocr.read_region(crop)
+                    if reg:
+                        region = reg
+                        normalized = reg + pp.body
+                        valid = validator.is_valid(normalized)
+                        region_uncertain = False
+                        vlog.update_region(rowid, normalized, valid)
+                if save_crop:
+                    os.makedirs(plates_dir, exist_ok=True)
+                    fname = f"{int(ts*1000)}_{cam_id}_{_safe_name(normalized)}.jpg"
+                    snapshot_path = os.path.join(plates_dir, fname)
+                    cv2.imwrite(snapshot_path, crop)
+                    vlog.set_snapshot(rowid, snapshot_path)
+        # полный кадр события (общий вид машины) — только для новых событий
+        if logged and full_dir:
+            os.makedirs(full_dir, exist_ok=True)
+            full_path = os.path.join(full_dir, f"{int(ts*1000)}_{cam_id}_veh.jpg")
+            cv2.imwrite(full_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            vlog.set_full(rowid, full_path)
 
         out.append({
-            "normalized": pp.normalized, "body": pp.body, "region": pp.region,
-            "valid": pp.valid, "region_uncertain": pp.region_uncertain,
+            "normalized": normalized, "body": pp.body, "region": region,
+            "valid": valid, "region_uncertain": region_uncertain,
             "ocr_conf": p.ocr_conf, "det_conf": p.det_conf,
             "snapshot_path": snapshot_path, "logged": logged,
         })

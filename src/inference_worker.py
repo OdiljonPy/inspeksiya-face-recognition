@@ -23,9 +23,10 @@ from stage1_single_stream import resize_to_width
 
 class InferenceWorker(threading.Thread):
     def __init__(self, frame_queue, face_engines, gallery, settings, stop_event, on_result,
-                 cam_modes=None, cam_det=None, cam_width=None,
+                 cam_modes=None, cam_det=None, cam_width=None, cam_roi=None,
                  anpr_engine=None, anpr_validator=None,
-                 vehicle_log=None, plates_dir=None, on_plate=None):
+                 vehicle_log=None, plates_dir=None, on_plate=None,
+                 veh_full_dir=None, region_ocr=None):
         super().__init__(daemon=True, name="inference")
         self.q = frame_queue
         # пул движков лиц по det_size: {640: FaceEngine, 1280: FaceEngine, ...}
@@ -39,6 +40,7 @@ class InferenceWorker(threading.Thread):
         # per-camera параметры (с дефолтами из settings)
         self.cam_det = cam_det or {}          # cam_id -> det_size
         self.cam_width = cam_width or {}       # cam_id -> width (0 = без ресайза)
+        self.cam_roi = cam_roi or {}           # cam_id -> [x1,y1,x2,y2] (зона обработки)
         self.default_det = settings["recognition"]["det_size"]
 
         # ANPR-компоненты (могут быть None, если plate-камер нет)
@@ -47,6 +49,9 @@ class InferenceWorker(threading.Thread):
         self.vehicle_log = vehicle_log
         self.plates_dir = plates_dir
         self.anpr_min_conf = settings["anpr"]["min_ocr_confidence"]
+        self.anpr_min_px = int(settings["anpr"].get("min_plate_px", 0))
+        self.veh_full_dir = veh_full_dir       # куда писать полный кадр события транспорта
+        self.region_ocr = region_ocr           # второй OCR-проход региона (или None)
         self.on_plate = on_plate
 
         self.trackers: dict[str, CameraTracker] = {}
@@ -70,6 +75,19 @@ class InferenceWorker(threading.Thread):
             self.trackers[cam_id] = t
         return t
 
+    def _apply_roi(self, cam_id: str, frame):
+        """Кроп зоны обработки (roi из cameras.yaml). Пиксели НЕ масштабируются,
+        поэтому все замеры качества/px остаются в исходном масштабе."""
+        roi = self.cam_roi.get(cam_id)
+        if not roi:
+            return frame
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, int(roi[0])), max(0, int(roi[1]))
+        x2, y2 = min(w, int(roi[2])), min(h, int(roi[3]))
+        if x2 - x1 < 32 or y2 - y1 < 32:      # битый roi — не роняем обработку
+            return frame
+        return frame[y1:y2, x1:x2]
+
     def run(self):
         while not self.stop_event.is_set():
             try:
@@ -85,13 +103,16 @@ class InferenceWorker(threading.Thread):
             if do_face and self.gallery is not None:
                 self.gallery.maybe_reload()
 
+            # ROI-кроп (зона прохода/ворот) — общий для лиц и ANPR
+            roi_frame = self._apply_roi(item.cam_id, item.frame)
+
             # -------- ЛИЦА --------
             if do_face:
                 t0 = time.time()
                 engine = self._face_engine(item.cam_id)
                 # per-camera ресайз (0 = без ресайза, нативное); det_size задаёт движок
                 w = self.cam_width.get(item.cam_id, 0)
-                frame = item.frame
+                frame = roi_frame
                 scale = 1.0                       # frame_w/original_w (для размера лица в исходных px)
                 if w and w > 0 and frame.shape[1] > w:
                     frame, scale = resize_to_width(frame, w)
@@ -114,8 +135,10 @@ class InferenceWorker(threading.Thread):
                 t0 = time.time()
                 plate_res = process_frame(
                     self.anpr_engine, self.anpr_validator, self.vehicle_log,
-                    item.frame, item.cam_id, item.zone, self.plates_dir,
+                    roi_frame, item.cam_id, item.zone, self.plates_dir,
                     self.anpr_min_conf, ts=item.capture_ts, object_id=item.object_id,
+                    full_dir=self.veh_full_dir, region_ocr=self.region_ocr,
+                    min_plate_px=self.anpr_min_px,
                 )
                 now = time.time()
                 infer_ms = (now - t0) * 1000

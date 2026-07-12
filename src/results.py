@@ -15,6 +15,8 @@ class FaceResult:
     q_px: float = None
     q_blur: float = None
     q_yaw: float = None
+    # «серая зона» матчинга: ID присвоен по ближайшему, но уверенности мало
+    uncertain: bool = False
 
 
 @dataclass
