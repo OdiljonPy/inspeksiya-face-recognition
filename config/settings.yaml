@@ -67,6 +67,8 @@ anpr:
   detector_conf: 0.40          # порог уверенности детектора номера
   min_ocr_confidence: 0.50     # минимальная средняя уверенность OCR, чтобы логировать событие
   min_plate_px: 60             # мин. ширина бокса номера, px (мельче — уверенный мусор OCR)
+  require_valid_body: true     # логировать ТОЛЬКО если тело номера соответствует формату РУз
+                               # (фары/решётки дают текст с conf>=0.5, но не формат номера)
   region_ocr: true             # второй OCR-проход региона (rapidocr) для region_uncertain событий
   save_full_frame: true        # сохранять полный кадр события транспорта (data/full)
   device: auto                 # auto|cuda|cpu (cuda -> sm_120 через gpu_setup, как у лиц)

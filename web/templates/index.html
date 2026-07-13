@@ -88,7 +88,7 @@
   <section id="view-vehicles" class="hidden">
     <table>
       <thead><tr>
-        <th>Номер</th><th>Распознано</th><th>Время</th><th>Камера</th><th>Зона</th>
+        <th>Номер</th><th>Распознано</th><th>Фото</th><th>Время</th><th>Камера</th><th>Зона</th>
         <th>Confidence</th><th>Статус</th><th></th>
       </tr></thead>
       <tbody id="vehiclesBody"></tbody>
@@ -378,6 +378,7 @@ async function loadVehicles() {
     return `<tr>
       <td class="id" style="font-size:15px">${r.plate}</td>
       <td>${r.plate_url ? `<img class="thumb" style="width:90px;height:34px" src="${r.plate_url}">` : "—"}</td>
+      <td>${r.full_url ? `<a href="${r.full_url}" target="_blank"><img class="thumb" style="width:96px;height:54px" src="${r.full_url}"></a>` : "—"}</td>
       <td>${fmtTime(r.ts)}</td>
       <td>${r.camera_id}</td>
       <td>${r.zone||""}</td>

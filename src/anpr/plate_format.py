@@ -38,6 +38,7 @@ class PlateParse:
     valid: bool            # полностью соответствует узбекскому regex
     region_uncertain: bool # регион не похож на 2 цифры (интерим: тело надёжно, регион — нет)
     region_fixed: bool = False  # регион восстановлен позиционной коррекцией букв->цифр
+    body_ok: bool = False       # тело соответствует одному из форматов РУз (фильтр мусора)
 
 
 # Регион РУз — ВСЕГДА 2 цифры, а глобальная OCR-модель предпочитает буквы
@@ -116,4 +117,4 @@ class PlateValidator:
         region_uncertain = body_ok and not region_ok
         return PlateParse(raw=text, normalized=norm, region=region, body=body,
                           valid=valid, region_uncertain=region_uncertain,
-                          region_fixed=region_fixed)
+                          region_fixed=region_fixed, body_ok=body_ok)

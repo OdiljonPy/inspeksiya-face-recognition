@@ -20,7 +20,8 @@ def _safe_name(s: str) -> str:
 
 def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
                   plates_dir, min_conf, ts=None, save_crop=True, object_id="default",
-                  full_dir=None, region_ocr=None, min_plate_px=0) -> list[dict]:
+                  full_dir=None, region_ocr=None, min_plate_px=0,
+                  require_body=True) -> list[dict]:
     """
     Прогнать кадр через ANPR. Для каждого номера выше порога:
       - разобрать (регион/тело, флаги),
@@ -41,6 +42,10 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
         if min_plate_px and p.bbox and (p.bbox[2] - p.bbox[0]) < min_plate_px:
             continue
         pp = validator.parse(p.text)
+        # фильтр ложных срабатываний детектора (фары/решётки): OCR даёт текст с
+        # conf>=порога, но он НЕ похож на тело номера РУз — не логируем
+        if require_body and not pp.body_ok:
+            continue
         # ключ дедупа — надёжное тело номера (регион может «плавать»)
         dedup_key = pp.body or pp.normalized
 

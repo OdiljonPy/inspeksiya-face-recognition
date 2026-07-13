@@ -50,6 +50,7 @@ class InferenceWorker(threading.Thread):
         self.plates_dir = plates_dir
         self.anpr_min_conf = settings["anpr"]["min_ocr_confidence"]
         self.anpr_min_px = int(settings["anpr"].get("min_plate_px", 0))
+        self.anpr_require_body = bool(settings["anpr"].get("require_valid_body", True))
         self.veh_full_dir = veh_full_dir       # куда писать полный кадр события транспорта
         self.region_ocr = region_ocr           # второй OCR-проход региона (или None)
         self.on_plate = on_plate
@@ -138,7 +139,7 @@ class InferenceWorker(threading.Thread):
                     roi_frame, item.cam_id, item.zone, self.plates_dir,
                     self.anpr_min_conf, ts=item.capture_ts, object_id=item.object_id,
                     full_dir=self.veh_full_dir, region_ocr=self.region_ocr,
-                    min_plate_px=self.anpr_min_px,
+                    min_plate_px=self.anpr_min_px, require_body=self.anpr_require_body,
                 )
                 now = time.time()
                 infer_ms = (now - t0) * 1000
