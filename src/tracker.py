@@ -143,6 +143,10 @@ class CameraTracker:
                 # качественный И достаточно похож на владельца (гейт внутри галереи)
                 score = self.g.own_score(own, emb)
                 self.g.maybe_add_embedding(own, emb, ts, quality_ok=quality_ok())
+                # best-shot: заметно лучший кадр обновляет фото галереи,
+                # но ТОЛЬКО при уверенном сходстве (чужим лицом фото не перетрём)
+                if score >= self.g.match_threshold:
+                    self.g.maybe_update_crop(own, frame, t.bbox, det, f.kps, self._scale)
                 return fr(t.label, score, False, t.crop_path)
 
         # ★ ФИЛЬТР КАЧЕСТВА — перед FAISS, только для НЕопознанных лиц (если включён) ★
@@ -169,6 +173,7 @@ class CameraTracker:
             t.label = ident.label
             t.crop_path = ident.crop_path
             self.g.maybe_add_embedding(ident, emb, ts, quality_ok=quality_ok())
+            self.g.maybe_update_crop(ident, frame, t.bbox, det, f.kps, self._scale)
             return fr(ident.label, score, False, ident.crop_path)
         t.match_frames = 0               # серия подтверждений прервалась
 
@@ -176,7 +181,8 @@ class CameraTracker:
         if score < self.g.new_id_threshold and quality_ok():
             t.candidate_frames += 1
             if t.candidate_frames >= self.confirm:
-                ident = self.g.add_new(emb, frame, f.bbox, ts)
+                ident = self.g.add_new(emb, frame, f.bbox, ts,
+                                       det_score=det, kps=f.kps, scale=self._scale)
                 t.label = ident.label
                 t.crop_path = ident.crop_path
                 return fr(ident.label, score, True, ident.crop_path)

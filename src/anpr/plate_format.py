@@ -41,6 +41,18 @@ class PlateParse:
     body_ok: bool = False       # тело соответствует одному из форматов РУз (фильтр мусора)
 
 
+# Действующие коды регионов на номерных знаках РУз. Другие двузначные числа
+# регионом НЕ являются (сужает пространство и режет ложные «регионы»).
+VALID_REGIONS = frozenset({
+    "01", "10", "20", "25", "30", "40", "50",
+    "60", "70", "75", "80", "85", "90", "95",
+})
+
+
+def region_valid(region: str) -> bool:
+    return region in VALID_REGIONS
+
+
 # Регион РУз — ВСЕГДА 2 цифры, а глобальная OCR-модель предпочитает буквы
 # (01 -> CI/OI, 80 -> BO и т.п.). Позиционная коррекция ТОЛЬКО для регион-префикса:
 # буквы, визуально похожие на цифры -> цифры. К телу номера НЕ применять.
@@ -54,14 +66,12 @@ _REGION_L2D = str.maketrans({
 def fix_region(prefix: str) -> str:
     """
     Восстановить 2-значный регион из битого OCR-префикса ("CI" -> "01", "S0" -> "50").
-    Возвращает исправленный регион или "" (если восстановить надёжно нельзя).
+    Возвращает исправленный регион или "" (если результат не входит в VALID_REGIONS).
     """
     if len(prefix) != 2:
         return ""
     fixed = prefix.translate(_REGION_L2D)
-    if fixed.isdigit() and 1 <= int(fixed) <= 99:
-        return fixed
-    return ""
+    return fixed if fixed in VALID_REGIONS else ""
 
 
 # тело номера РУз без региона: "S772SB" (частный) / "123ABC" (юрлица) / "1234AB" (прицеп)
@@ -102,7 +112,7 @@ class PlateValidator:
         else:
             region, body = norm[:2], norm[2:]
             body_ok = bool(_BODY_RE.fullmatch(body))
-        region_ok = region.isdigit() and len(region) == 2 and 1 <= int(region) <= 99
+        region_ok = region_valid(region)
         region_fixed = False
         # регион битый, но тело надёжно -> пробуем позиционную коррекцию букв->цифр
         if body_ok and not region_ok:

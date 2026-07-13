@@ -38,6 +38,7 @@ class Identity:
     first_seen: float
     last_seen: float
     n_emb: int = 0      # сколько эмбеддингов в базе у этого человека
+    best_quality: float = 0.0  # оценка качества текущего снимка (best-shot)
 
 
 class Gallery:
@@ -165,8 +166,10 @@ class Gallery:
         self.index.add(row)
         self.identities[owner_idx].n_emb += 1
 
-    def add_new(self, normed_emb, frame, bbox, ts: float) -> Identity:
-        """Создать нового человека: ID + снимок (один раз) + первый эмбеддинг."""
+    def add_new(self, normed_emb, frame, bbox, ts: float,
+                det_score: float = 0.0, kps=None, scale: float = 1.0) -> Identity:
+        """Создать нового человека: ID + снимок + первый эмбеддинг.
+        Снимок дальше улучшается best-shot'ом (maybe_update_crop)."""
         idx = len(self.identities)
         label = f"person_{self._next_num:04d}"
         self._next_num += 1
@@ -178,7 +181,8 @@ class Gallery:
 
         ident = Identity(idx=idx, label=label,
                          crop_path=os.path.relpath(crop_path, _project_root()),
-                         first_seen=ts, last_seen=ts, n_emb=0)
+                         first_seen=ts, last_seen=ts, n_emb=0,
+                         best_quality=round(shot_quality(det_score, bbox, kps, frame, scale), 4))
         self.identities.append(ident)
         self._append_embedding(idx, normed_emb)
         self.save()
@@ -190,6 +194,25 @@ class Gallery:
         if rows.shape[0] == 0:
             return 0.0
         return float(np.max(rows @ emb.reshape(-1)))
+
+    def maybe_update_crop(self, ident: Identity, frame, bbox, det_score: float,
+                          kps, scale: float = 1.0):
+        """
+        Best-shot: если текущий кадр ЗАМЕТНО лучше сохранённого снимка этого
+        человека — перезаписать person_XXXX.jpg. Фото «дозревает» до лучшего
+        ракурса, пока человек в кадре (дашборд подхватит через ?v=mtime).
+        Гистерезис +15%, чтобы не молотить диск на каждом кадре.
+        """
+        q = shot_quality(det_score, bbox, kps, frame, scale)
+        if q <= ident.best_quality * 1.15:
+            return
+        crop = self._crop_face(frame, bbox)
+        if crop is None:
+            return
+        abs_path = os.path.join(self.faces_dir, f"{ident.label}.jpg")
+        cv2.imwrite(abs_path, crop)
+        ident.best_quality = round(q, 4)
+        self.save()
 
     def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, ts: float,
                             quality_ok: bool = True):
@@ -293,6 +316,30 @@ class Gallery:
 
 
 # ----------------------------- утилиты качества -----------------------------
+def shot_quality(det_score, bbox, kps, frame, scale: float = 1.0) -> float:
+    """
+    Композитная оценка кадра для best-shot: det_score × yaw-фронтальность ×
+    размер × резкость (мягко). Абсолютное значение не важно — сравниваем кадры
+    ОДНОГО человека между собой (det_score хорошо коррелирует с ракурсом:
+    анфас ~0.86, опущенная голова ~0.71 — замерено на реальных кадрах).
+    """
+    try:
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        px = min(x2 - x1, y2 - y1) / max(scale, 1e-6)
+        s_px = min(px / 120.0, 1.0)                    # насыщение на 120px
+        h, w = frame.shape[:2]
+        cx1, cy1 = max(0, x1), max(0, y1)
+        cx2, cy2 = min(w, x2), min(h, y2)
+        if cx2 <= cx1 or cy2 <= cy1:
+            return 0.0
+        blur = blur_var(frame[cy1:cy2, cx1:cx2])
+        s_blur = 0.5 + 0.5 * min(blur / 150.0, 1.0)    # смаз штрафует максимум вдвое
+        # float(): frontality может вернуть numpy-скаляр, а он ломает json.dump в save()
+        return float(float(det_score) * frontality(kps) * s_px * s_blur)
+    except Exception:
+        return 0.0
+
+
 def frontality(kps) -> float:
     """
     Оценка фронтальности лица [0..1] по 5 ключевым точкам insightface
