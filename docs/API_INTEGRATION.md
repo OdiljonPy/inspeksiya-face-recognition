@@ -55,6 +55,7 @@ GET /api/v1/faces?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-12&
   "datetime": "2026-07-10 09:30:00",
   "object_id": "obj_avloniy",
   "object_name": "Avloniy",
+  "object_index": 41109,
   "camera_id": "cam03",
   "zone": "Avloniy - 1",
   "person": "person_0001",
@@ -78,7 +79,8 @@ GET /api/v1/persons?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-1
 ```
 
 Параметры: `object_id`, `date_from`, `date_to`, `limit`, `offset`.
-`Unknown`/`LOW_QUALITY` исключены всегда.
+`Unknown`/`LOW_QUALITY` исключены всегда. Если задан `object_id`, в корне ответа
+дополнительно `object_id` и `object_index` (индекс объекта во внешней системе).
 
 Элемент `items`:
 ```json
@@ -122,6 +124,7 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
   "datetime": "2026-07-10 09:30:00",
   "object_id": "obj_avloniy",
   "object_name": "Avloniy",
+  "object_index": 41109,
   "camera_id": "cam03",
   "zone": "Avloniy - 1",
   "plate": "01S772SB",

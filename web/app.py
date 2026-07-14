@@ -508,6 +508,11 @@ def _abs(request: Request, rel_url: str) -> str:
     return (str(request.base_url).rstrip("/") + rel_url) if rel_url else ""
 
 
+def _object_indexes() -> dict:
+    """object_id -> object_index (индекс объекта во внешней системе, из cameras.yaml)."""
+    return {o["id"]: o.get("object_index") for o in load_objects()}
+
+
 def _gallery_face_urls() -> dict:
     """label -> относительный URL снимка из галереи."""
     out = {}
@@ -551,6 +556,7 @@ def api_v1_faces(request: Request,
         where.append(f"person NOT IN ({ph})"); params.extend(_UNIDENT)
     cond = (" WHERE " + " AND ".join(where)) if where else ""
     names = _object_names()
+    indexes = _object_indexes()
     with _db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM events{cond}", params).fetchone()[0]
         rows = conn.execute(
@@ -561,6 +567,7 @@ def api_v1_faces(request: Request,
         "id": r["id"], "ts": r["ts"], "datetime": _iso(r["ts"]),
         "object_id": r["object_id"],
         "object_name": names.get(r["object_id"], r["object_id"]),
+        "object_index": indexes.get(r["object_id"]),
         "camera_id": r["camera_id"], "zone": r["zone"],
         "person": r["person"],
         "score": round(r["score"], 3) if r["score"] is not None else None,
@@ -606,7 +613,10 @@ def api_v1_persons(request: Request,
         "cameras": (r["cams"] or "").split(","),
         "face_url": _abs(request, faces.get(r["person"], "")),
     } for r in rows]
-    return {"total": total, "limit": limit, "offset": offset, "items": items}
+    return {"total": total, "limit": limit, "offset": offset,
+            "object_id": object_id or None,
+            "object_index": _object_indexes().get(object_id) if object_id else None,
+            "items": items}
 
 
 @app.get("/api/v1/vehicles")
@@ -637,6 +647,7 @@ def api_v1_vehicles(request: Request,
         where.append("timestamp <= ?"); params.append(to)
     cond = (" WHERE " + " AND ".join(where)) if where else ""
     names = _object_names()
+    indexes = _object_indexes()
     try:
         with _db() as conn:
             total = conn.execute(
@@ -655,6 +666,7 @@ def api_v1_vehicles(request: Request,
             "id": r["id"], "ts": r["timestamp"], "datetime": _iso(r["timestamp"]),
             "object_id": r["object_id"],
             "object_name": names.get(r["object_id"], r["object_id"]),
+            "object_index": indexes.get(r["object_id"]),
             "camera_id": r["camera_id"], "zone": r["zone"],
             "plate": pp.normalized or r["plate_normalized"],
             "plate_raw": r["plate_text"],
