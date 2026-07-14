@@ -513,6 +513,24 @@ def _object_indexes() -> dict:
     return {o["id"]: o.get("object_index") for o in load_objects()}
 
 
+def _resolve_object_index(object_index: str, object_id: str) -> str:
+    """
+    Фильтр по object_index (индекс во внешней системе) -> наш object_id.
+    Неизвестный индекс -> 404; конфликт с явным object_id -> 422.
+    """
+    if not object_index:
+        return object_id
+    matches = [o["id"] for o in load_objects()
+               if str(o.get("object_index") or "") == object_index.strip()]
+    if not matches:
+        raise HTTPException(status_code=404,
+                            detail=f"объект с object_index={object_index} не найден")
+    if object_id and object_id != matches[0]:
+        raise HTTPException(status_code=422,
+                            detail="object_id и object_index указывают на разные объекты")
+    return matches[0]
+
+
 def _gallery_face_urls() -> dict:
     """label -> относительный URL снимка из галереи."""
     out = {}
@@ -526,6 +544,7 @@ def _gallery_face_urls() -> dict:
 @app.get("/api/v1/faces")
 def api_v1_faces(request: Request,
                  object_id: str = Query("", description="фильтр по объекту"),
+                 object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
                  camera_id: str = Query("", description="фильтр по камере"),
                  person: str = Query("", description="фильтр по ID человека (person_0001)"),
                  date_from: str = Query("", description="unix ts | YYYY-MM-DD | YYYY-MM-DDTHH:MM:SS"),
@@ -535,6 +554,7 @@ def api_v1_faces(request: Request,
                  limit: int = Query(100, ge=1, le=1000),
                  offset: int = Query(0, ge=0)):
     """API 1: события ЛИЦ. Сортировка — новые сверху. total — всего под фильтром."""
+    object_id = _resolve_object_index(object_index, object_id)
     if not os.path.exists(DB_PATH):
         return {"total": 0, "limit": limit, "offset": offset, "items": []}
     where, params = [], []
@@ -581,10 +601,12 @@ def api_v1_faces(request: Request,
 @app.get("/api/v1/persons")
 def api_v1_persons(request: Request,
                    object_id: str = Query("", description="фильтр по объекту"),
+                   object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
                    date_from: str = Query(""), date_to: str = Query(""),
                    limit: int = Query(100, ge=1, le=1000),
                    offset: int = Query(0, ge=0)):
     """API 1а: УНИКАЛЬНЫЕ люди на объекте за период (агрегация событий по person)."""
+    object_id = _resolve_object_index(object_index, object_id)
     if not os.path.exists(DB_PATH):
         return {"total": 0, "limit": limit, "offset": offset, "items": []}
     ph = ",".join("?" * len(_UNIDENT))
@@ -622,6 +644,7 @@ def api_v1_persons(request: Request,
 @app.get("/api/v1/vehicles")
 def api_v1_vehicles(request: Request,
                     object_id: str = Query("", description="фильтр по объекту"),
+                    object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
                     camera_id: str = Query("", description="фильтр по камере"),
                     plate: str = Query("", description="поиск по номеру (подстрока)"),
                     valid: str = Query("", description="'1' — только валидные РУз, '0' — только невалидные"),
@@ -629,6 +652,7 @@ def api_v1_vehicles(request: Request,
                     limit: int = Query(100, ge=1, le=1000),
                     offset: int = Query(0, ge=0)):
     """API 2: события ТРАНСПОРТА. region/body разбираются из номера на лету."""
+    object_id = _resolve_object_index(object_index, object_id)
     if not os.path.exists(DB_PATH):
         return {"total": 0, "limit": limit, "offset": offset, "items": []}
     where, params = [], []

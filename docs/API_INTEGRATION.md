@@ -34,6 +34,7 @@ GET /api/v1/faces
 | Параметр | Описание |
 |---|---|
 | `object_id` | фильтр по объекту (`obj_avloniy`, `obj_102maktab`, ...) |
+| `object_index` | фильтр по индексу объекта во внешней системе (`41109`, `38357`); неизвестный индекс → 404, конфликт с `object_id` → 422 |
 | `camera_id` | фильтр по камере (`cam03`, ...) |
 | `person` | фильтр по ID человека (`person_0001`) |
 | `date_from`, `date_to` | период (см. формат дат) |
@@ -78,7 +79,7 @@ GET /api/v1/faces?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-12&
 GET /api/v1/persons?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-12
 ```
 
-Параметры: `object_id`, `date_from`, `date_to`, `limit`, `offset`.
+Параметры: `object_id`, `object_index`, `date_from`, `date_to`, `limit`, `offset`.
 `Unknown`/`LOW_QUALITY` исключены всегда. Если задан `object_id`, в корне ответа
 дополнительно `object_id` и `object_index` (индекс объекта во внешней системе).
 
@@ -105,6 +106,7 @@ GET /api/v1/vehicles
 | Параметр | Описание |
 |---|---|
 | `object_id` | фильтр по объекту |
+| `object_index` | фильтр по индексу объекта во внешней системе |
 | `camera_id` | фильтр по камере |
 | `plate` | поиск по номеру (подстрока, регистр не важен) |
 | `valid` | `1` — только валидные по формату РУз, `0` — только невалидные |
