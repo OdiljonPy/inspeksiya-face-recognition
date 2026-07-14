@@ -14,11 +14,14 @@ web/app.py — Этап 5. FastAPI-дашборд (localhost).
   затем открыть http://127.0.0.1:8000
 """
 import os
+import re
 import sys
 import json
 import time
 import sqlite3
 import threading
+import urllib.request
+import urllib.error
 
 # чтобы импортировать config из src/ и live из web/
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -637,6 +640,44 @@ def _plate_validator():
         from anpr.plate_format import PlateValidator
         _PLATE_VALIDATOR = PlateValidator(cfg["anpr"]["plate_regex"])
     return _PLATE_VALIDATOR
+
+
+# ==================== ИНТЕГРАЦИЯ ГАИ (владелец ТС по номеру) ====================
+# Дашборд не ходит во внешний сервис напрямую (CORS/сеть) — проксируем через бек.
+# Ответы кэшируются по номеру, чтобы не дёргать сервис при повторных кликах.
+_GAI_CACHE: dict[str, tuple[float, dict]] = {}
+_GAI_LOCK = threading.Lock()
+
+
+@app.get("/api/gai/{plate}")
+def api_gai(plate: str):
+    """Инфо о владельце ТС по номеру (прокси к сервису ГАИ из settings.integration)."""
+    plate = re.sub(r"[^A-Z0-9]", "", plate.upper())
+    if not plate:
+        raise HTTPException(status_code=422, detail="пустой номер")
+    icfg = cfg.get("integration", {}) or {}
+    url = icfg.get("gai_url", "")
+    if not url:
+        raise HTTPException(status_code=503, detail="integration.gai_url не настроен в settings.yaml")
+    ttl = float(icfg.get("gai_cache_seconds", 3600))
+    now = time.time()
+    with _GAI_LOCK:
+        hit = _GAI_CACHE.get(plate)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    req = urllib.request.Request(
+        url, data=json.dumps({"plate_number": plate}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=float(icfg.get("gai_timeout", 12))) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"сервис ГАИ ответил ошибкой: HTTP {e.code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"сервис ГАИ недоступен: {e}")
+    with _GAI_LOCK:
+        _GAI_CACHE[plate] = (now, data)
+    return data
 
 
 # ============================ LIVE (просмотр камеры с боксами) ============================

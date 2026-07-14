@@ -38,7 +38,8 @@ def _save_full_frame(frame, cam_id, ts, full_dir) -> str:
     os.makedirs(full_dir, exist_ok=True)
     name = f"{int(ts*1000)}_{cam_id}.jpg"
     path = os.path.join(full_dir, name)
-    cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # 95: кадр уже сжат камерой, повторный JPEG-85 добавлял артефакты на архивные фото
+    cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return path
 
 
@@ -53,7 +54,7 @@ def _save_face_crop(frame, bbox, cam_id, ts, out_dir) -> str:
         return ""
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{int(ts*1000)}_{cam_id}_{x1}_{y1}.jpg")
-    cv2.imwrite(path, crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    cv2.imwrite(path, crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return path
 
 

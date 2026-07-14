@@ -89,7 +89,7 @@
     <table>
       <thead><tr>
         <th>Номер</th><th>Распознано</th><th>Фото</th><th>Время</th><th>Камера</th><th>Зона</th>
-        <th>Confidence</th><th>Статус</th><th></th>
+        <th>Confidence</th><th>Статус</th><th>ГАИ</th><th></th>
       </tr></thead>
       <tbody id="vehiclesBody"></tbody>
     </table>
@@ -132,6 +132,21 @@
       их уникальность не определяется (считается число событий).
     </div>
   </section>
+
+  <!-- Модалка: инфо о владельце ТС из ГАИ -->
+  <div id="gaiModal" class="hidden"
+       style="position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:60"
+       onclick="if(event.target===this)this.classList.add('hidden')">
+    <div style="max-width:680px;margin:50px auto;background:var(--card);border:1px solid var(--line);
+                border-radius:12px;padding:18px;max-height:82vh;overflow:auto">
+      <div style="display:flex;align-items:center;gap:10px">
+        <h3 id="gaiTitle" style="margin:0">ГАИ</h3>
+        <div class="spacer"></div>
+        <button class="del" onclick="document.getElementById('gaiModal').classList.add('hidden')">✕ Закрыть</button>
+      </div>
+      <div id="gaiBody" class="muted" style="margin-top:12px">…</div>
+    </div>
+  </div>
 
   <section id="view-person" class="hidden">
     <button class="tab" onclick="backFromPerson()">← Назад</button>
@@ -384,11 +399,75 @@ async function loadVehicles() {
       <td>${r.zone||""}</td>
       <td>${r.confidence ?? ""}</td>
       <td>${status}</td>
+      <td><button class="tab" style="padding:4px 10px" onclick="showGai('${r.plate}')">ГАИ</button></td>
       <td><button class="del" onclick="delVehicle('${r.plate}')">✕</button></td>
     </tr>`;
   }).join("");
   document.getElementById("status").textContent =
     "номеров: " + rows.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+// ---------- ГАИ: инфо о владельце ТС по номеру ----------
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function gaiRow(label, val) {
+  if (val === null || val === undefined || val === "") return "";
+  return `<tr><td class="muted" style="white-space:nowrap">${label}</td><td>${esc(val)}</td></tr>`;
+}
+
+async function showGai(plate) {
+  const m = document.getElementById("gaiModal");
+  const body = document.getElementById("gaiBody");
+  document.getElementById("gaiTitle").textContent = "ГАИ — " + plate;
+  body.innerHTML = "Запрос в ГАИ…";
+  m.classList.remove("hidden");
+  let d;
+  try {
+    const r = await fetch("/api/gai/" + encodeURIComponent(plate));
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      body.innerHTML = `<span style="color:var(--new)">Ошибка: ${esc(err.detail || r.status)}</span>`;
+      return;
+    }
+    d = await r.json();
+  } catch (e) {
+    body.innerHTML = `<span style="color:var(--new)">Сеть недоступна: ${esc(e)}</span>`;
+    return;
+  }
+  if (d.pResult !== 1) {
+    body.innerHTML = `<span style="color:var(--new)">Не найдено: ${esc(d.pComment || "нет данных")}</span>`;
+    return;
+  }
+  const ownerType = d.pOwnerType === 1 ? "юрлицо" : (d.pOwnerType === 2 ? "физлицо" : d.pOwnerType);
+  let html = `<table style="width:100%">` +
+    gaiRow("Владелец", d.pOwner) +
+    gaiRow("Тип владельца", ownerType) +
+    gaiRow("ИНН организации", d.pOrganizationInn) +
+    gaiRow("ПИНФЛ", d.pPinpp) +
+    `</table>`;
+  for (const v of (d.Vehicle || [])) {
+    const addr = v.address ? v.address.address : "";
+    html += `<h4 style="margin:14px 0 6px;color:var(--txt)">${esc(v.pPlateNumber || "")} — ${esc(v.pModel || "")}</h4>` +
+      `<table style="width:100%">` +
+      gaiRow("Цвет", v.pVehicleColor) +
+      gaiRow("Год выпуска", v.pYear) +
+      gaiRow("Тип кузова", v.pBodyTypeName) +
+      gaiRow("Техпаспорт", (v.pTexpassportSery || "") + " " + (v.pTexpassportNumber || "")) +
+      gaiRow("Дата регистрации", v.pRegistrationDate) +
+      gaiRow("Техосмотр до", v.NextInspectionDate) +
+      gaiRow("VIN/шасси", v.pShassi) +
+      gaiRow("Двигатель", v.pMotor) +
+      gaiRow("Мощность, л.с.", v.pPower) +
+      gaiRow("Масса (полн./пуст.), кг", v.pFullWeight ? `${v.pFullWeight} / ${v.pEmptyWeight}` : "") +
+      gaiRow("Мест", v.pSeats) +
+      gaiRow("Адрес", addr) +
+      gaiRow("Отметки", v.specNotes) +
+      `</table>`;
+  }
+  body.innerHTML = html;
 }
 
 async function delPerson(label) {

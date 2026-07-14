@@ -66,6 +66,18 @@ def _draw_faces(frame, engine, gallery, min_det):
     return len(faces), n_ok
 
 
+def _draw_persons(frame, engine):
+    """Боксы ЛЮДЕЙ (person-first, этап 1). Возвращает число людей."""
+    dets = engine.detect(frame)
+    for d in dets:
+        x1, y1, x2, y2 = d.bbox
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+        cv2.putText(frame, f"person {d.conf:.2f} {x2-x1}x{y2-y1}px",
+                    (x1, max(12, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+    return len(dets)
+
+
 def _draw_plates(frame, anpr, validator, min_conf):
     """Боксы номеров + текст + размер. Возвращает счётчики."""
     plates = anpr.predict(frame)
@@ -95,7 +107,7 @@ def _hud(frame, lines):
 
 
 def capture_loop(cfg, source, width, det_size, target_fps, do_faces, do_plates,
-                 face_engine, anpr, validator, gallery, stop=None):
+                 face_engine, anpr, validator, gallery, person_engine=None, stop=None):
     if stop is None:
         stop = threading.Event()
     min_det = cfg["recognition"]["min_det_score"]
@@ -139,7 +151,9 @@ def capture_loop(cfg, source, width, det_size, target_fps, do_faces, do_plates,
             else:
                 small, scale = frame, 1.0          # без ресайза — нативное разрешение
             t0 = time.time()
-            nf = nf_ok = npl = npl_ok = 0
+            nf = nf_ok = npl = npl_ok = npers = 0
+            if person_engine is not None:
+                npers = _draw_persons(small, person_engine)
             if do_faces:
                 nf, nf_ok = _draw_faces(small, face_engine, gallery, min_det)
             if do_plates:
@@ -156,8 +170,8 @@ def capture_loop(cfg, source, width, det_size, target_fps, do_faces, do_plates,
                            if (width and width > 0) else "NATIVE (no resize)")
             _hud(small, [
                 f"src {orig_w}x{orig_h} -> {resized_txt}  det_size={det_size}  fps={fps_ema:.1f}  infer={infer_ms:.0f}ms",
-                f"faces={nf} (ok={nf_ok})   plates={npl} (ok={npl_ok})",
-                "orange box = too small/weak to recognize",
+                f"persons={npers}   faces={nf} (ok={nf_ok})   plates={npl} (ok={npl_ok})",
+                "magenta = person, green = face, blue = plate, orange = too weak",
             ])
             ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ok:
@@ -232,6 +246,8 @@ def main():
                     help="вход детектора лиц (SCRFD); больше = ловит мелкие лица, но медленнее")
     ap.add_argument("--no-faces", action="store_true")
     ap.add_argument("--no-plates", action="store_true")
+    ap.add_argument("--no-persons", action="store_true",
+                    help="выключить боксы людей (person-first, этап 1)")
     ap.add_argument("--recognize", action="store_true", help="подписывать лица ID из галереи")
     args = ap.parse_args()
     if not args.source and not args.camera:
@@ -262,9 +278,27 @@ def main():
         anpr = AnprEngine(cfg)
         validator = PlateValidator(cfg["anpr"]["plate_regex"])
 
+    # детектор человека (person-first, этап 1): включён по умолчанию, если модель есть
+    person_engine = None
+    if not args.no_persons:
+        try:
+            from person_engine import PersonEngine
+            pcfg = cfg.get("person", {}) or {}
+            person_engine = PersonEngine(
+                pcfg.get("model", "data/models/yolov8n.onnx"),
+                conf=float(pcfg.get("conf", 0.5)),
+                input_size=int(pcfg.get("input_size", 640)),
+            )
+            person_engine.warmup()
+        except Exception as e:
+            print(f"[persons] детектор человека недоступен ({e}) — боксы людей выключены")
+            person_engine = None
+
     print(f"Источник: {source}\nФейсы={do_faces} Номера={do_plates} "
+          f"Люди={person_engine is not None} "
           f"width={'NATIVE' if not width else width} det_size={det_size} "
-          f"GPU_faces={getattr(face_engine,'on_gpu',None)} GPU_anpr={getattr(anpr,'on_gpu',None)}")
+          f"GPU_faces={getattr(face_engine,'on_gpu',None)} GPU_anpr={getattr(anpr,'on_gpu',None)} "
+          f"GPU_persons={getattr(person_engine,'on_gpu',None)}")
     print(f"Открой в браузере: http://<IP-сервера>:{args.port}")
 
     stop = threading.Event()
@@ -272,7 +306,8 @@ def main():
     t = threading.Thread(target=capture_loop, kwargs=dict(
         cfg=cfg, source=source, width=width, det_size=det_size,
         target_fps=cfg["recognition"]["target_fps"], do_faces=do_faces, do_plates=do_plates,
-        face_engine=face_engine, anpr=anpr, validator=validator, gallery=gallery, stop=stop),
+        face_engine=face_engine, anpr=anpr, validator=validator, gallery=gallery,
+        person_engine=person_engine, stop=stop),
         daemon=True)
     t.start()
     try:

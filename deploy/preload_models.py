@@ -64,12 +64,27 @@ def preload_anpr_and_rapidocr() -> None:
         print(f"[preload] RapidOCR предупреждение: {e}")
 
 
+def check_person_model() -> None:
+    """Модель человека (yolov8n.onnx) приезжает через git (data/models/) —
+    экспорт из .pt требует torch, которого на сервере нет."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = os.path.join(root, "data", "models", "yolov8n.onnx")
+    if os.path.exists(p):
+        print(f"[preload] модель человека на месте: {p}")
+    else:
+        print("[preload] ВНИМАНИЕ: data/models/yolov8n.onnx нет — детектор человека "
+              "(person-first, debug_stream) работать не будет. Модель должна прийти "
+              "через git; экспорт делается на dev: ultralytics YOLO('yolov8n.pt')"
+              ".export(format='onnx') (yolov8n.pt — с HF-зеркала Ultralytics/YOLOv8).")
+
+
 def main() -> int:
     try:
         preload_buffalo_l()
     except Exception as e:
         print(f"[preload] ОШИБКА buffalo_l: {e}")
         return 1
+    check_person_model()
     try:
         preload_anpr_and_rapidocr()
     except Exception as e:

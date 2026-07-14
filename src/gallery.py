@@ -38,7 +38,6 @@ class Identity:
     first_seen: float
     last_seen: float
     n_emb: int = 0      # сколько эмбеддингов в базе у этого человека
-    best_quality: float = 0.0  # оценка качества текущего снимка (best-shot)
 
 
 class Gallery:
@@ -55,9 +54,6 @@ class Gallery:
         self.crop_margin = float(g["crop_margin"])
         self.new_id_min_det = float(g["new_id_min_det_score"])
         self.new_id_min_px = int(g["new_id_min_face_px"])
-        # крупные лица почти не бывают ложными -> det-порог мягче
-        self.large_face_px = int(g.get("new_id_large_face_px", 100))
-        self.large_face_det = float(g.get("new_id_large_face_det", self.new_id_min_det))
         self.min_frontality = float(g["new_id_min_frontality"])
         self.min_blur = float(g["new_id_min_blur"])
         self.dim = dim
@@ -85,7 +81,11 @@ class Gallery:
             return
         with open(meta_p, "r", encoding="utf-8") as f:
             meta = json.load(f)
-        self.identities = [Identity(**d) for d in meta.get("identities", [])]
+        # meta.json мог быть записан другой версией кода (лишние поля, напр.
+        # best_quality) — незнакомые ключи молча отбрасываем, а не падаем
+        fields = Identity.__dataclass_fields__
+        self.identities = [Identity(**{k: v for k, v in d.items() if k in fields})
+                           for d in meta.get("identities", [])]
         self._next_num = meta.get("next_num", len(self.identities) + 1)
         self.embeddings = np.zeros((0, self.dim), dtype=np.float32)
         self.owners = np.zeros((0,), dtype=np.int64)
@@ -166,10 +166,8 @@ class Gallery:
         self.index.add(row)
         self.identities[owner_idx].n_emb += 1
 
-    def add_new(self, normed_emb, frame, bbox, ts: float,
-                det_score: float = 0.0, kps=None, scale: float = 1.0) -> Identity:
-        """Создать нового человека: ID + снимок + первый эмбеддинг.
-        Снимок дальше улучшается best-shot'ом (maybe_update_crop)."""
+    def add_new(self, normed_emb, frame, bbox, ts: float) -> Identity:
+        """Создать нового человека: ID + снимок (один раз) + первый эмбеддинг."""
         idx = len(self.identities)
         label = f"person_{self._next_num:04d}"
         self._next_num += 1
@@ -181,57 +179,18 @@ class Gallery:
 
         ident = Identity(idx=idx, label=label,
                          crop_path=os.path.relpath(crop_path, _project_root()),
-                         first_seen=ts, last_seen=ts, n_emb=0,
-                         best_quality=round(shot_quality(det_score, bbox, kps, frame, scale), 4))
+                         first_seen=ts, last_seen=ts, n_emb=0)
         self.identities.append(ident)
         self._append_embedding(idx, normed_emb)
         self.save()
         return ident
 
-    def own_score(self, ident: Identity, emb: np.ndarray) -> float:
-        """Похожесть эмбеддинга на СВОИ эмбеддинги этого человека (max cosine)."""
-        rows = self.embeddings[self.owners == ident.idx]
-        if rows.shape[0] == 0:
-            return 0.0
-        return float(np.max(rows @ emb.reshape(-1)))
-
-    def maybe_update_crop(self, ident: Identity, frame, bbox, det_score: float,
-                          kps, scale: float = 1.0):
-        """
-        Best-shot: если текущий кадр ЗАМЕТНО лучше сохранённого снимка этого
-        человека — перезаписать person_XXXX.jpg. Фото «дозревает» до лучшего
-        ракурса, пока человек в кадре (дашборд подхватит через ?v=mtime).
-        Гистерезис +15%, чтобы не молотить диск на каждом кадре.
-        """
-        q = shot_quality(det_score, bbox, kps, frame, scale)
-        if q <= ident.best_quality * 1.15:
-            return
-        crop = self._crop_face(frame, bbox)
-        if crop is None:
-            return
-        abs_path = os.path.join(self.faces_dir, f"{ident.label}.jpg")
-        cv2.imwrite(abs_path, crop)
-        ident.best_quality = round(q, 4)
-        self.save()
-
-    def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, ts: float,
-                            quality_ok: bool = True):
-        """
-        Добавить ещё один ракурс. Защита от «отравления» галереи:
-          - quality_ok: кадр прошёл те же гейты качества, что и для нового ID
-            (плохой кадр может удерживать ID трека, но в базу не попадает);
-          - похожесть на СВОИ эмбеддинги >= match_threshold (раньше сравнивали
-            с глобальным ближайшим — чужой мусор попадал в ID и «слипал» людей);
-          - < add_below: слишком похожий ракурс не даёт новой информации.
-        """
+    def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, score: float, ts: float):
+        """Добавить ещё один ракурс, если их мало и кадр достаточно «другой»."""
         ident.last_seen = ts
-        if not quality_ok or ident.n_emb >= self.max_emb:
-            return
-        s = self.own_score(ident, emb)
-        if s < self.match_threshold or s >= self.add_below:
-            return
-        self._append_embedding(ident.idx, emb)
-        self.save()
+        if ident.n_emb < self.max_emb and score < self.add_below:
+            self._append_embedding(ident.idx, emb)
+            self.save()
 
     def get_by_label(self, label: str):
         for i in self.identities:
@@ -281,33 +240,21 @@ class Gallery:
             self.save()
             return label
 
-    def quality_ok_for_new(self, det_score: float, bbox, kps, frame,
-                           scale: float = 1.0) -> bool:
+    def quality_ok_for_new(self, det_score: float, bbox, kps, frame) -> bool:
         """
         Можно ли по этому лицу заводить НОВЫЙ ID? Требуем:
         уверенную детекцию, крупный размер, фронтальность (не профиль), резкость.
-        scale — frame_w/original_w: размер лица меряем в ИСХОДНЫХ пикселях.
-        Det-порог адаптивный: мелким лицам строго (ложные детекции почти всегда
-        мелкие), крупным — мягче (new_id_large_face_det).
         """
-        x1, y1, x2, y2 = bbox
-        px = min(x2 - x1, y2 - y1) / max(scale, 1e-6)
-        if px < self.new_id_min_px:
+        if det_score < self.new_id_min_det:
             return False
-        need_det = self.large_face_det if px >= self.large_face_px else self.new_id_min_det
-        if det_score < need_det:
+        x1, y1, x2, y2 = bbox
+        if min(x2 - x1, y2 - y1) < self.new_id_min_px:
             return False
         if frontality(kps) < self.min_frontality:
             return False
         if self.min_blur > 0:
-            # резкость меряем по ТЕСНОМУ bbox (как face_quality.py): кроп с полями
-            # (_crop_face) добавляет гладкий фон и занижает дисперсию Лапласиана
-            h, w = frame.shape[:2]
-            cx1, cy1 = max(0, int(x1)), max(0, int(y1))
-            cx2, cy2 = min(w, int(x2)), min(h, int(y2))
-            if cx2 <= cx1 or cy2 <= cy1:
-                return False
-            if blur_var(frame[cy1:cy2, cx1:cx2]) < self.min_blur:
+            crop = self._crop_face(frame, bbox)
+            if crop is None or blur_var(crop) < self.min_blur:
                 return False
         return True
 
@@ -316,30 +263,6 @@ class Gallery:
 
 
 # ----------------------------- утилиты качества -----------------------------
-def shot_quality(det_score, bbox, kps, frame, scale: float = 1.0) -> float:
-    """
-    Композитная оценка кадра для best-shot: det_score × yaw-фронтальность ×
-    размер × резкость (мягко). Абсолютное значение не важно — сравниваем кадры
-    ОДНОГО человека между собой (det_score хорошо коррелирует с ракурсом:
-    анфас ~0.86, опущенная голова ~0.71 — замерено на реальных кадрах).
-    """
-    try:
-        x1, y1, x2, y2 = [int(v) for v in bbox]
-        px = min(x2 - x1, y2 - y1) / max(scale, 1e-6)
-        s_px = min(px / 120.0, 1.0)                    # насыщение на 120px
-        h, w = frame.shape[:2]
-        cx1, cy1 = max(0, x1), max(0, y1)
-        cx2, cy2 = min(w, x2), min(h, y2)
-        if cx2 <= cx1 or cy2 <= cy1:
-            return 0.0
-        blur = blur_var(frame[cy1:cy2, cx1:cx2])
-        s_blur = 0.5 + 0.5 * min(blur / 150.0, 1.0)    # смаз штрафует максимум вдвое
-        # float(): frontality может вернуть numpy-скаляр, а он ломает json.dump в save()
-        return float(float(det_score) * frontality(kps) * s_px * s_blur)
-    except Exception:
-        return 0.0
-
-
 def frontality(kps) -> float:
     """
     Оценка фронтальности лица [0..1] по 5 ключевым точкам insightface

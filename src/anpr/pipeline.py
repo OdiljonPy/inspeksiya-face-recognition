@@ -89,7 +89,7 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
         if logged and full_dir:
             os.makedirs(full_dir, exist_ok=True)
             full_path = os.path.join(full_dir, f"{int(ts*1000)}_{cam_id}_veh.jpg")
-            cv2.imwrite(full_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            cv2.imwrite(full_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             vlog.set_full(rowid, full_path)
 
         out.append({

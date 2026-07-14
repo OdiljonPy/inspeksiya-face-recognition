@@ -179,4 +179,18 @@ curl "http://<host>:8089/api/v1/persons?object_id=obj_avloniy&date_from=2026-07-
 curl "http://<host>:8089/api/v1/vehicles?plate=S772&valid=1"
 ```
 
+---
+
+## Прокси к сервису ГАИ (для дашборда)
+
+```
+GET /api/gai/{plate}
+```
+Проксирует POST на `integration.gai_url` (settings.yaml) с телом `{"plate_number": "<plate>"}`
+и возвращает ответ сервиса как есть. Ответы кэшируются по номеру
+(`integration.gai_cache_seconds`, по умолчанию 1 час). Ошибки сервиса -> HTTP 502 с описанием.
+Используется кнопкой «ГАИ» на вкладке Транспорт; можно дёргать и напрямую.
+
+---
+
 Интерактивная документация (Swagger UI): `http://<host>:8089/docs`
