@@ -26,7 +26,7 @@ class InferenceWorker(threading.Thread):
                  cam_modes=None, cam_det=None, cam_width=None, cam_roi=None,
                  anpr_engine=None, anpr_validator=None,
                  vehicle_log=None, plates_dir=None, on_plate=None,
-                 veh_full_dir=None, region_ocr=None):
+                 veh_full_dir=None, region_ocr=None, gai_checker=None):
         super().__init__(daemon=True, name="inference")
         self.q = frame_queue
         # пул движков лиц по det_size: {640: FaceEngine, 1280: FaceEngine, ...}
@@ -53,6 +53,7 @@ class InferenceWorker(threading.Thread):
         self.anpr_require_body = bool(settings["anpr"].get("require_valid_body", True))
         self.veh_full_dir = veh_full_dir       # куда писать полный кадр события транспорта
         self.region_ocr = region_ocr           # второй OCR-проход региона (или None)
+        self.gai_checker = gai_checker         # фоновая проверка по базе ГАИ (или None)
         self.on_plate = on_plate
 
         self.trackers: dict[str, CameraTracker] = {}
@@ -140,6 +141,7 @@ class InferenceWorker(threading.Thread):
                     self.anpr_min_conf, ts=item.capture_ts, object_id=item.object_id,
                     full_dir=self.veh_full_dir, region_ocr=self.region_ocr,
                     min_plate_px=self.anpr_min_px, require_body=self.anpr_require_body,
+                    gai_checker=self.gai_checker,
                 )
                 now = time.time()
                 infer_ms = (now - t0) * 1000

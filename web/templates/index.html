@@ -66,6 +66,15 @@
       <option value="">Все</option>
     </select>
   </label>
+  <label class="muted hidden" id="gaiFilterWrap">ГАИ:&nbsp;
+    <select id="gaiFilter" onchange="loadVehicles()">
+      <option value="" selected>Все</option>
+      <option value="found">Есть в базе</option>
+      <option value="not_found">Нет в базе</option>
+      <option value="unchecked">Не проверен</option>
+      <option value="error">Ошибка проверки</option>
+    </select>
+  </label>
   <label class="muted">Объект:&nbsp;
     <select id="objectFilter" onchange="onObjectChange()"><option value="">Все объекты</option></select>
   </label>
@@ -187,6 +196,7 @@ function switchTab(t) {
   document.getElementById("view-person").classList.add("hidden");   // карточка — только по клику
   document.getElementById("plateSearch").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("statusFilterWrap").classList.toggle("hidden", t !== "vehicles");
+  document.getElementById("gaiFilterWrap").classList.toggle("hidden", t !== "vehicles");
   if (t === "live") loadLiveCameras();
   else stopLive();           // уходя со вкладки — закрыть MJPEG (освободить камеру/GPU)
   refresh();
@@ -395,13 +405,18 @@ async function loadVehicles() {
   const cam = document.getElementById("cameraFilter").value;
   const q = document.getElementById("plateSearch").value.trim();
   const status = document.getElementById("statusFilter").value;
-  const rows = await (await fetch(`/api/vehicle_events?limit=200&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}`)).json();
+  const gai = document.getElementById("gaiFilter").value;
+  const rows = await (await fetch(`/api/vehicle_events?limit=200&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}`)).json();
   const body = document.getElementById("vehiclesBody");
   document.getElementById("vehiclesEmpty").classList.toggle("hidden", rows.length > 0);
   body.innerHTML = rows.map(r => {
-    const status = r.valid ? '<span class="badge seen">OK</span>'
-                 : (r.region_uncertain ? '<span class="badge new">регион?</span>'
-                                       : '<span class="badge new">невалид</span>');
+    let status = r.valid ? '<span class="badge seen">OK</span>'
+               : (r.region_uncertain ? '<span class="badge new">регион?</span>'
+                                     : '<span class="badge new">невалид</span>');
+    if (r.gai_status === "not_found")
+      status += ' <span class="badge new" title="ГАИ вернуло 404/500">нет в ГАИ</span>';
+    else if (r.gai_status === "error")
+      status += ' <span class="badge" style="background:rgba(255,165,0,.15);color:orange" title="сервис ГАИ был недоступен">ГАИ?</span>';
     return `<tr>
       <td class="id" style="font-size:15px;white-space:nowrap">${r.plate}
         <button class="tab" style="padding:1px 7px;font-size:12px" title="Исправить номер"

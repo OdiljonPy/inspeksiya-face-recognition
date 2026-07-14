@@ -130,7 +130,8 @@ def _ensure_schema():
         for stmt in ("ALTER TABLE events ADD COLUMN full_path TEXT",
                      "ALTER TABLE events ADD COLUMN uncertain INTEGER NOT NULL DEFAULT 0",
                      "ALTER TABLE vehicle_events ADD COLUMN full_path TEXT",
-                     "ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'"):
+                     "ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'",
+                     "ALTER TABLE vehicle_events ADD COLUMN gai_status TEXT"):
             try:
                 c.execute(stmt)
                 c.commit()
@@ -235,12 +236,13 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                        object: str = Query("", description="фильтр по объекту"),
                        q: str = Query("", description="поиск по номеру (подстрока)"),
                        valid: str = Query("", description="'1' — валидные, '0' — невалидные, '' — все"),
+                       gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
                        limit: int = Query(100, ge=1, le=1000)):
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
     sql = ("SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
-           "confidence, snapshot_path, valid, region_uncertain, full_path, object_id "
-           "FROM vehicle_events")
+           "confidence, snapshot_path, valid, region_uncertain, full_path, object_id, "
+           "gai_status FROM vehicle_events")
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
@@ -250,6 +252,10 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
         where.append("plate_normalized LIKE ?"); params.append(f"%{q.upper()}%")
     if valid in ("0", "1"):
         where.append("valid = ?"); params.append(int(valid))
+    if gai in ("found", "not_found", "error"):
+        where.append("gai_status = ?"); params.append(gai)
+    elif gai == "unchecked":
+        where.append("(gai_status IS NULL OR gai_status = '')")
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY timestamp DESC LIMIT ?"; params.append(limit)
@@ -267,6 +273,7 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "full_url": _full_url(r["full_path"]),
                     "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
                     "object_id": r["object_id"] or "default",
+                    "gai_status": r["gai_status"] or "",
                 })
     except sqlite3.OperationalError:
         return JSONResponse([])   # таблицы ещё нет
@@ -648,6 +655,7 @@ def api_v1_vehicles(request: Request,
                     camera_id: str = Query("", description="фильтр по камере"),
                     plate: str = Query("", description="поиск по номеру (подстрока)"),
                     valid: str = Query("", description="'1' — только валидные РУз, '0' — только невалидные"),
+                    gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
                     date_from: str = Query(""), date_to: str = Query(""),
                     limit: int = Query(100, ge=1, le=1000),
                     offset: int = Query(0, ge=0)):
@@ -664,6 +672,10 @@ def api_v1_vehicles(request: Request,
         where.append("plate_normalized LIKE ?"); params.append(f"%{plate.upper()}%")
     if valid in ("0", "1"):
         where.append("valid = ?"); params.append(int(valid))
+    if gai in ("found", "not_found", "error"):
+        where.append("gai_status = ?"); params.append(gai)
+    elif gai == "unchecked":
+        where.append("(gai_status IS NULL OR gai_status = '')")
     frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
     if frm is not None:
         where.append("timestamp >= ?"); params.append(frm)
@@ -678,8 +690,8 @@ def api_v1_vehicles(request: Request,
                 f"SELECT COUNT(*) FROM vehicle_events{cond}", params).fetchone()[0]
             rows = conn.execute(
                 "SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
-                f"confidence, snapshot_path, full_path, valid, region_uncertain, object_id "
-                f"FROM vehicle_events{cond} "
+                f"confidence, snapshot_path, full_path, valid, region_uncertain, object_id, "
+                f"gai_status FROM vehicle_events{cond} "
                 "ORDER BY timestamp DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
     except sqlite3.OperationalError:
         return {"total": 0, "limit": limit, "offset": offset, "items": []}   # таблицы ещё нет
@@ -696,6 +708,7 @@ def api_v1_vehicles(request: Request,
             "plate_raw": r["plate_text"],
             "region": pp.region, "body": pp.body,
             "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
+            "gai_status": r["gai_status"] or "",
             "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
             "plate_url": _abs(request, _plate_url(r["snapshot_path"])),
             "full_url": _abs(request, _full_url(r["full_path"])),
@@ -752,10 +765,41 @@ def api_gai(plate: str):
         hit = _GAI_CACHE.get(plate)
         if hit and now - hit[0] < ttl:
             return hit[1]
-    data = _post_json(url, {"plate_number": plate}, float(icfg.get("gai_timeout", 12)))
+    req = urllib.request.Request(
+        url, data=json.dumps({"plate_number": plate}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=float(icfg.get("gai_timeout", 12))) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 500):
+            # по договорённости: 404/500 = машины нет в базе ГАИ
+            _set_gai_status_by_plate(plate, "not_found")
+            data = {"pResult": 0, "pComment": f"Нет в базе ГАИ (HTTP {e.code})"}
+            with _GAI_LOCK:
+                _GAI_CACHE[plate] = (now, data)
+            return data
+        raise HTTPException(status_code=502, detail=f"сервис ГАИ ответил ошибкой: HTTP {e.code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"сервис ГАИ недоступен: {e}")
+    # ручная проверка тоже обновляет статус событий этого номера
+    _set_gai_status_by_plate(plate, "found" if data.get("pResult") == 1 else "not_found")
     with _GAI_LOCK:
         _GAI_CACHE[plate] = (now, data)
     return data
+
+
+def _set_gai_status_by_plate(plate: str, status: str):
+    """Обновить gai_status у ВСЕХ событий с этим номером (ручная проверка из модалки)."""
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        with _db() as conn:
+            conn.execute("UPDATE vehicle_events SET gai_status=? WHERE plate_normalized=?",
+                         (status, plate))
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
 
 def _tax_date(s: str) -> str:

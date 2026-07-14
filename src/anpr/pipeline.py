@@ -21,7 +21,7 @@ def _safe_name(s: str) -> str:
 def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
                   plates_dir, min_conf, ts=None, save_crop=True, object_id="default",
                   full_dir=None, region_ocr=None, min_plate_px=0,
-                  require_body=True) -> list[dict]:
+                  require_body=True, gai_checker=None) -> list[dict]:
     """
     Прогнать кадр через ANPR. Для каждого номера выше порога:
       - разобрать (регион/тело, флаги),
@@ -85,6 +85,10 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
                     snapshot_path = os.path.join(plates_dir, fname)
                     cv2.imwrite(snapshot_path, crop)
                     vlog.set_snapshot(rowid, snapshot_path)
+        # НОВОЕ событие -> фоновая проверка по базе ГАИ (после коррекции региона,
+        # чтобы отправить исправленный номер; сам запрос — в отдельном потоке)
+        if logged and gai_checker is not None:
+            gai_checker.enqueue(rowid, normalized)
         # полный кадр события (общий вид машины) — только для новых событий
         if logged and full_dir:
             os.makedirs(full_dir, exist_ok=True)

@@ -110,6 +110,7 @@ GET /api/v1/vehicles
 | `camera_id` | фильтр по камере |
 | `plate` | поиск по номеру (подстрока, регистр не важен) |
 | `valid` | `1` — только валидные по формату РУз, `0` — только невалидные |
+| `gai` | статус проверки по базе ГАИ: `found` / `not_found` (машины нет в базе) / `error` / `unchecked` |
 | `date_from`, `date_to` | период |
 | `limit`, `offset` | пагинация |
 
@@ -134,6 +135,7 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
   "region": "01",
   "body": "S772SB",
   "valid": true,
+  "gai_status": "found",
   "region_uncertain": false,
   "confidence": 0.84,
   "plate_url": "http://<host>/plates/1783657800000_cam03_01S772SB.jpg?v=...",

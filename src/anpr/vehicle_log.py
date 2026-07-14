@@ -45,12 +45,15 @@ class VehicleLog:
                 valid            INTEGER NOT NULL DEFAULT 0,  -- соответствует формату РУз
                 region_uncertain INTEGER NOT NULL DEFAULT 0, -- интерим: регион ненадёжен
                 object_id        TEXT DEFAULT 'default',     -- объект/стройплощадка (Задача 2)
-                full_path        TEXT                        -- полный кадр события (общий вид)
+                full_path        TEXT,                       -- полный кадр события (общий вид)
+                gai_status       TEXT                        -- проверка по базе ГАИ:
+                                                             -- found | not_found | error | NULL (не проверялся)
             )
         """)
         # миграция старых БД (идемпотентно)
         for stmt in ("ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'",
-                     "ALTER TABLE vehicle_events ADD COLUMN full_path TEXT"):
+                     "ALTER TABLE vehicle_events ADD COLUMN full_path TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN gai_status TEXT"):
             try:
                 self.conn.execute(stmt)
             except sqlite3.OperationalError:
@@ -113,6 +116,13 @@ class VehicleLog:
             self.conn.execute(
                 "UPDATE vehicle_events SET plate_normalized=?, valid=?, region_uncertain=0 "
                 "WHERE id=?", (plate_normalized, 1 if valid else 0, rowid))
+            self.conn.commit()
+
+    def set_gai_status(self, rowid: int, status: str):
+        """Записать результат проверки по базе ГАИ (found|not_found|error)."""
+        with self.lock:
+            self.conn.execute("UPDATE vehicle_events SET gai_status=? WHERE id=?",
+                              (status, rowid))
             self.conn.commit()
 
     def set_full(self, rowid: int, full_path: str):

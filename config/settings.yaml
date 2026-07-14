@@ -96,3 +96,7 @@ integration:
   # cameras.yaml) и ИНН владельца ТС за последние N месяцев (/api/tax-check).
   facturas_url: "http://10.10.136.137:8011/get-facturas-by-inn"
   facturas_months: 3       # период сверки, месяцев назад от сегодня
+  # Автопроверка НОВОГО транспорта по базе ГАИ (фоновый поток в main.py).
+  # Статус пишется в vehicle_events.gai_status: found | not_found (HTTP 404/500
+  # или pResult!=1 = машины нет в базе) | error (сервис недоступен).
+  gai_check_on_new: true

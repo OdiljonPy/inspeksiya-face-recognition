@@ -188,7 +188,7 @@ def main():
         print(f"  лица GPU={any_gpu}, движков={len(face_engines)}, ID в галерее={gallery.count()}")
 
     # --- ANPR (если есть plate/both) ---
-    anpr_engine = anpr_validator = vehicle_log = region_ocr = None
+    anpr_engine = anpr_validator = vehicle_log = region_ocr = gai_checker = None
     plates_dir = cfg["paths"]["plates"]
     veh_full_dir = None
     if need_anpr:
@@ -201,8 +201,16 @@ def main():
         if cfg["anpr"].get("region_ocr", False):
             from anpr.region_ocr import RegionOCR
             region_ocr = RegionOCR()
+        # фоновая проверка нового транспорта по базе ГАИ (статус в gai_status)
+        icfg = cfg.get("integration", {}) or {}
+        if icfg.get("gai_check_on_new", True) and icfg.get("gai_url"):
+            from anpr.gai_check import GaiChecker
+            gai_checker = GaiChecker(icfg["gai_url"], float(icfg.get("gai_timeout", 12)),
+                                     vehicle_log)
+            gai_checker.start()
         print(f"  ANPR GPU={anpr_engine.on_gpu}"
-              f" region_ocr={'on' if region_ocr and region_ocr.ok else 'off'}")
+              f" region_ocr={'on' if region_ocr and region_ocr.ok else 'off'}"
+              f" gai_check={'on' if gai_checker else 'off'}")
 
     q = queue.Queue(maxsize=args.queue_size)
     stop_event = threading.Event()
@@ -216,7 +224,7 @@ def main():
         anpr_engine=anpr_engine, anpr_validator=anpr_validator,
         vehicle_log=vehicle_log, plates_dir=plates_dir,
         on_plate=make_plate_handler(args.quiet) if need_anpr else None,
-        veh_full_dir=veh_full_dir, region_ocr=region_ocr,
+        veh_full_dir=veh_full_dir, region_ocr=region_ocr, gai_checker=gai_checker,
     )
     stats_t = threading.Thread(target=stats_printer,
                                args=(workers, infer, q, gallery, vehicle_log, stop_event),
