@@ -27,19 +27,30 @@
 #     rtsp: "rtsp://192.168.100.133/live"
 
 # Объекты (стройплощадки): группировка камер. У каждой камеры — object_id.
+# object_index      — индекс объекта во внешней системе
+# construction_inn  — ИНН генподрядчика (строительной компании)
+# zakazchik_inn     — ИНН заказчика
+# ИНН-ы используются кнопкой «Сверка с налогом» (фактуры владельца ТС к этим ИНН).
 objects:
   - id: obj_avloniy
     name: "Avloniy"
     address: ""
+    object_index: 41109
+    construction_inn: "203658827"
+    zakazchik_inn: "204775594"
   - id: obj_102maktab
     name: "102-maktab"
     address: ""
+    object_index: 38357
+    construction_inn: "302795742"
+    zakazchik_inn: "204775594"
 
 cameras:
 #  - id: cam01
 #    zone: "BODYCam1"
-#    rtsp: "rtsp://192.168.100.133/live"
+#    rtsp: "rtsp://192.168.100.22/live"
 #    mode: both
+#    fps: 6            # одна тестовая камера — можно чаще (дефолт 2 рассчитан на 10 камер)
 #  - id: cam02
 #    zone: "Въезд / КПП"
 #    rtsp: "rtsp://admin:admin123@12.6.0.8:8554/cam/realmonitor?channel=1&subtype=0"
