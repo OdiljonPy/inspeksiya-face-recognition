@@ -74,8 +74,10 @@ def fix_region(prefix: str) -> str:
     return fixed if fixed in VALID_REGIONS else ""
 
 
-# тело номера РУз без региона: "S772SB" (частный) / "123ABC" (юрлица) / "1234AB" (прицеп)
-_BODY_ALTS = r"[A-Z][0-9]{3}[A-Z]{2}|[0-9]{3}[A-Z]{3}|[0-9]{4}[A-Z]{2}"
+# Тело номера РУз без региона — РОВНО два нужных типа (требование от 14.07.2026):
+#   физлицо: "A123BC" (буква + 3 цифры + 2 буквы)
+#   юрлицо:  "123ABC" (3 цифры + 3 буквы)
+_BODY_ALTS = r"[A-Z][0-9]{3}[A-Z]{2}|[0-9]{3}[A-Z]{3}"
 _BODY_RE = re.compile(rf"^({_BODY_ALTS})$")
 _BODY_SUFFIX_RE = re.compile(rf"({_BODY_ALTS})$")
 

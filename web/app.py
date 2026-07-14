@@ -227,6 +227,7 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
 def api_vehicle_events(camera: str = Query("", description="фильтр по camera_id"),
                        object: str = Query("", description="фильтр по объекту"),
                        q: str = Query("", description="поиск по номеру (подстрока)"),
+                       valid: str = Query("", description="'1' — валидные, '0' — невалидные, '' — все"),
                        limit: int = Query(100, ge=1, le=1000)):
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
@@ -239,6 +240,8 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
         where.append("object_id = ?"); params.append(object)
     if q:
         where.append("plate_normalized LIKE ?"); params.append(f"%{q.upper()}%")
+    if valid in ("0", "1"):
+        where.append("valid = ?"); params.append(int(valid))
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY timestamp DESC LIMIT ?"; params.append(limit)
