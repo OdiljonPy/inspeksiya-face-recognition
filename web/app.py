@@ -332,6 +332,31 @@ def api_delete_person(label: str):
     return {"deleted": label, "events_deleted": events_deleted}
 
 
+@app.patch("/api/vehicle_event/{event_id}/plate")
+def api_edit_plate(event_id: int, plate: str = Query(..., description="новый номер")):
+    """
+    Исправить номер у события транспорта (опечатка OCR). Номер нормализуется
+    (UPPER, только A-Z0-9), прогоняется через валидатор (включая коррекцию
+    региона) — флаги valid/region_uncertain пересчитываются.
+    """
+    norm = re.sub(r"[^A-Z0-9]", "", plate.upper())
+    if not norm:
+        raise HTTPException(status_code=422, detail="пустой номер")
+    pp = _plate_validator().parse(norm)
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(status_code=404, detail="нет базы событий")
+    with _db() as conn:
+        cur = conn.execute(
+            "UPDATE vehicle_events SET plate_normalized=?, valid=?, region_uncertain=? "
+            "WHERE id=?",
+            (pp.normalized, 1 if pp.valid else 0, 1 if pp.region_uncertain else 0, event_id))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail=f"событие {event_id} не найдено")
+    return {"id": event_id, "plate": pp.normalized,
+            "valid": pp.valid, "region_uncertain": pp.region_uncertain}
+
+
 @app.delete("/api/vehicle/{plate}")
 def api_delete_vehicle(plate: str):
     """Удалить ВСЕ события транспорта по номеру + их кропы из data/plates/."""

@@ -403,7 +403,9 @@ async function loadVehicles() {
                  : (r.region_uncertain ? '<span class="badge new">регион?</span>'
                                        : '<span class="badge new">невалид</span>');
     return `<tr>
-      <td class="id" style="font-size:15px">${r.plate}</td>
+      <td class="id" style="font-size:15px;white-space:nowrap">${r.plate}
+        <button class="tab" style="padding:1px 7px;font-size:12px" title="Исправить номер"
+                onclick="editPlate(${r.id}, '${r.plate}')">✎</button></td>
       <td>${r.plate_url ? `<img class="thumb" style="width:90px;height:34px" src="${r.plate_url}">` : "—"}</td>
       <td>${r.full_url ? `<a href="${r.full_url}" target="_blank"><img class="thumb" style="width:96px;height:54px" src="${r.full_url}"></a>` : "—"}</td>
       <td>${fmtTime(r.ts)}</td>
@@ -579,6 +581,19 @@ async function delPerson(label) {
   const r = await fetch("/api/gallery/" + encodeURIComponent(label), {method: "DELETE"});
   if (r.ok) { const d = await r.json(); loadGallery(); }
   else { alert("Ошибка удаления: " + r.status); }
+}
+
+async function editPlate(id, plate) {
+  const v = prompt("Исправить номер (регион + номер, без пробелов — можно с ними):", plate);
+  if (v === null || !v.trim() || v.trim().toUpperCase() === plate) return;
+  const r = await fetch(`/api/vehicle_event/${id}/plate?plate=${encodeURIComponent(v.trim())}`,
+                        {method: "PATCH"});
+  if (r.ok) {
+    loadVehicles();
+  } else {
+    const e = await r.json().catch(() => ({}));
+    alert("Ошибка: " + (e.detail || r.status));
+  }
 }
 
 async function delVehicle(plate) {
