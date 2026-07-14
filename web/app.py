@@ -690,13 +690,27 @@ def api_gai(plate: str):
     return data
 
 
+def _tax_date(s: str) -> str:
+    """'YYYY-MM-DD' (из <input type=date>) или 'DD.MM.YYYY' -> 'DD.MM.YYYY'."""
+    s = s.strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%d.%m.%Y")
+        except ValueError:
+            continue
+    raise HTTPException(status_code=422,
+                        detail=f"неверная дата: {s!r} (ожидается YYYY-MM-DD или DD.MM.YYYY)")
+
+
 @app.get("/api/tax-check")
 def api_tax_check(owner_inn: str = Query(..., description="ИНН владельца ТС (из ГАИ)"),
-                  object_id: str = Query(..., description="объект (стройплощадка)")):
+                  object_id: str = Query(..., description="объект (стройплощадка)"),
+                  date_from: str = Query("", description="начало периода (YYYY-MM-DD | DD.MM.YYYY)"),
+                  date_to: str = Query("", description="конец периода")):
     """
     Сверка с налогом: были ли счета-фактуры между владельцем ТС (продавец) и
-    ИНН-ами объекта (покупатели: заказчик и генподрядчик) за последние N месяцев.
-    Два запроса к integration.facturas_url, период — facturas_months назад от сегодня.
+    ИНН-ами объекта (покупатели: заказчик и генподрядчик). Период — из параметров,
+    по умолчанию facturas_months (деф. 3) месяцев назад от сегодня.
     """
     owner_inn = owner_inn.strip()
     if not owner_inn.isdigit():
@@ -709,32 +723,42 @@ def api_tax_check(owner_inn: str = Query(..., description="ИНН владель
     if obj is None:
         raise HTTPException(status_code=404, detail=f"объект {object_id!r} не найден в cameras.yaml")
 
-    months = int(icfg.get("facturas_months", 3))
-    end = datetime.now()
-    m = end.month - months
-    y = end.year + (m - 1) // 12
-    m = (m - 1) % 12 + 1
-    import calendar
-    start = end.replace(year=y, month=m, day=min(end.day, calendar.monthrange(y, m)[1]))
-    start_s, end_s = start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
+    if date_from and date_to:
+        start_s, end_s = _tax_date(date_from), _tax_date(date_to)
+    else:
+        months = int(icfg.get("facturas_months", 3))
+        end = datetime.now()
+        m = end.month - months
+        y = end.year + (m - 1) // 12
+        m = (m - 1) % 12 + 1
+        import calendar
+        start = end.replace(year=y, month=m, day=min(end.day, calendar.monthrange(y, m)[1]))
+        start_s, end_s = start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
 
     timeout = float(icfg.get("gai_timeout", 12))
     checks = []
+    owner_name = ""     # название владельца ТС (sellerName из фактур)
     for role, buyer in (("Заказчик", obj.get("zakazchik_inn")),
                         ("Генподрядчик", obj.get("construction_inn"))):
         if not buyer:
-            checks.append({"role": role, "buyer_inn": None,
-                           "error": f"ИНН не задан у объекта в cameras.yaml"})
+            checks.append({"role": role, "buyer_inn": None, "buyer_name": "",
+                           "error": "ИНН не задан у объекта в cameras.yaml"})
             continue
         payload = {"buyer_inn": int(buyer), "seller_inn": int(owner_inn),
                    "start_date": start_s, "end_date": end_s}
         try:
             data = _post_json(url, payload, timeout)
+            facturas = data.get("facturas", []) or []
+            # названия компаний возвращает сам сервис налоговой (в фактурах)
+            buyer_name = facturas[0].get("buyerName", "") if facturas else ""
+            if facturas and not owner_name:
+                owner_name = facturas[0].get("sellerName", "")
             checks.append({"role": role, "buyer_inn": str(buyer),
-                           "facturas": data.get("facturas", []) or []})
+                           "buyer_name": buyer_name, "facturas": facturas})
         except HTTPException as e:
-            checks.append({"role": role, "buyer_inn": str(buyer), "error": e.detail})
-    return {"owner_inn": owner_inn, "object_id": object_id,
+            checks.append({"role": role, "buyer_inn": str(buyer),
+                           "buyer_name": "", "error": e.detail})
+    return {"owner_inn": owner_inn, "owner_name": owner_name, "object_id": object_id,
             "object_name": obj.get("name", object_id),
             "start_date": start_s, "end_date": end_s, "checks": checks}
 

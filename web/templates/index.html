@@ -482,9 +482,16 @@ async function showGai(plate, objectId) {
   // «Сверка с налогом» — только если у владельца есть ИНН организации и известен объект
   if (d.pOrganizationInn && objectId && objectId !== "default") {
     _gaiCtx = {plate, objectId, ownerInn: String(d.pOrganizationInn)};
-    html += `<div style="margin-top:14px">
+    const today = new Date();
+    const from3m = new Date(today); from3m.setMonth(from3m.getMonth() - 3);
+    const iso = dt => dt.toISOString().slice(0, 10);
+    html += `<div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="tab" style="border-color:var(--accent);color:var(--accent)"
               onclick="taxCheck()">⚖ Сверка с налогом</button>
+      <label class="muted">с <input type="date" id="gaiDateFrom" value="${iso(from3m)}"
+        style="background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
+      <label class="muted">по <input type="date" id="gaiDateTo" value="${iso(today)}"
+        style="background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
     </div><div id="gaiTax" style="margin-top:10px"></div>`;
   } else if (d.pOrganizationInn) {
     html += `<div class="muted" style="margin-top:10px">Сверка с налогом недоступна:
@@ -504,9 +511,11 @@ async function taxCheck() {
   if (!_gaiCtx) return;
   const box = document.getElementById("gaiTax");
   box.innerHTML = "Запрос фактур…";
+  const df = document.getElementById("gaiDateFrom").value;
+  const dt = document.getElementById("gaiDateTo").value;
   let d;
   try {
-    const r = await fetch(`/api/tax-check?owner_inn=${encodeURIComponent(_gaiCtx.ownerInn)}&object_id=${encodeURIComponent(_gaiCtx.objectId)}`);
+    const r = await fetch(`/api/tax-check?owner_inn=${encodeURIComponent(_gaiCtx.ownerInn)}&object_id=${encodeURIComponent(_gaiCtx.objectId)}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       box.innerHTML = `<span style="color:var(--new)">Ошибка: ${esc(err.detail || r.status)}</span>`;
@@ -517,25 +526,32 @@ async function taxCheck() {
     box.innerHTML = `<span style="color:var(--new)">Сеть: ${esc(e)}</span>`;
     return;
   }
-  let html = `<div class="muted">Объект: ${esc(d.object_name)} · владелец ИНН ${esc(d.owner_inn)} ·
+  const owner = d.owner_name ? `${esc(d.owner_name)} (ИНН ${esc(d.owner_inn)})`
+                             : `ИНН ${esc(d.owner_inn)}`;
+  let html = `<div class="muted">Объект: ${esc(d.object_name)} · владелец: ${owner} ·
               период ${esc(d.start_date)} — ${esc(d.end_date)}</div>`;
   for (const c of d.checks) {
-    html += `<h4 style="margin:12px 0 6px;color:var(--txt)">${esc(c.role)} (ИНН ${esc(c.buyer_inn || "—")})`;
+    const who = c.buyer_name ? `${esc(c.buyer_name)} · ИНН ${esc(c.buyer_inn || "—")}`
+                             : `ИНН ${esc(c.buyer_inn || "—")}`;
+    html += `<h4 style="margin:12px 0 2px;color:var(--txt)">${esc(c.role)}`;
     if (c.error) {
-      html += ` — <span style="color:var(--new)">${esc(c.error)}</span></h4>`;
+      html += ` — <span style="color:var(--new)">${esc(c.error)}</span></h4>
+                <div class="muted" style="margin-bottom:6px">${who}</div>`;
       continue;
     }
     const n = c.facturas.length;
     html += n
       ? ` — <span class="badge seen">фактур: ${n}</span></h4>`
       : ` — <span class="badge new">фактур не найдено</span></h4>`;
+    html += `<div class="muted" style="margin-bottom:6px">${who}</div>`;
     if (n) {
       html += `<table style="width:100%"><thead><tr>
-        <th>№</th><th>Дата</th><th>Договор</th><th>Продавец</th><th>Сумма с НДС</th>
+        <th>№</th><th>Дата</th><th>Договор</th><th>Продавец</th><th>Услуга</th><th>Сумма с НДС</th>
         </tr></thead><tbody>`;
       for (const f of c.facturas) {
         html += `<tr><td>${esc(f.facturaNo)}</td><td>${esc(f.facturaDate)}</td>
           <td>${esc(f.contractNo)}</td><td>${esc(f.sellerName)}</td>
+          <td>${esc(f.catalogName || "")}</td>
           <td style="white-space:nowrap">${fmtMoney(f.deliverySumWithVat)}</td></tr>`;
       }
       html += `</tbody></table>`;

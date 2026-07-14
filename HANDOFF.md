@@ -195,7 +195,12 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   (get-facturas-by-inn): buyer = ИНН заказчика объекта и buyer = ИНН генподрядчика,
   seller = ИНН владельца ТС, период `facturas_months` (деф. 3 мес) назад от сегодня.
   ИНН-ы объектов — в cameras.yaml (objects[].zakazchik_inn / construction_inn /
-  object_index). «Фактур не найдено» = владелец ТС не связан с объектом финансово.
+  object_index). Названия компаний НЕ хранятся в конфиге — берутся из ответа
+  налоговой (buyerName/sellerName первой фактуры); если фактур нет — только ИНН.
+  В модалке: поля дат «с/по» (деф. 3 мес назад, /api/tax-check принимает
+  date_from/date_to), названия организаций (владелец — в шапке), таблица фактур
+  с колонкой «Услуга» (catalogName). «Фактур не найдено» = владелец ТС не связан
+  с объектом финансово.
 - **API интеграции (v1)** для внешней системы (web/app.py; полная дока — docs/API_INTEGRATION.md):
   `GET /api/v1/faces` (события лиц), `GET /api/v1/persons` (уникальные люди, агрегация),
   `GET /api/v1/vehicles` (транспорт). Фильтры: object_id, camera_id, person/plate/valid,
