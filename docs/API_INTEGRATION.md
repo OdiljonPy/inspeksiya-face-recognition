@@ -191,6 +191,17 @@ GET /api/gai/{plate}
 (`integration.gai_cache_seconds`, по умолчанию 1 час). Ошибки сервиса -> HTTP 502 с описанием.
 Используется кнопкой «ГАИ» на вкладке Транспорт; можно дёргать и напрямую.
 
+## Сверка с налогом (для дашборда)
+
+```
+GET /api/tax-check?owner_inn=<ИНН владельца>&object_id=<объект>
+```
+Два POST-запроса на `integration.facturas_url` (`get-facturas-by-inn`): покупатель —
+ИНН заказчика и ИНН генподрядчика объекта (из cameras.yaml), продавец — владелец ТС,
+период — `integration.facturas_months` (деф. 3) месяцев назад от сегодня.
+Ответ: `{owner_inn, object_name, start_date, end_date, checks: [{role, buyer_inn,
+facturas: [...] | error}]}`. Используется кнопкой «Сверка с налогом» в модалке ГАИ.
+
 ---
 
 Интерактивная документация (Swagger UI): `http://<host>:8089/docs`

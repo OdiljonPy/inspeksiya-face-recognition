@@ -189,6 +189,13 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   POST на `integration.gai_url` из settings.yaml (сервис доступен только из сети СЕРВЕРА,
   с dev не проверить — тестировано мок-сервером). Кэш ответов по номеру
   (`gai_cache_seconds`, деф. 1ч). Ошибки сервиса показываются в модалке текстом.
+- **Сверка с налогом (14.07.2026)**: кнопка «⚖ Сверка с налогом» ВНУТРИ модалки ГАИ
+  (видна только если у владельца есть ИНН организации и у события задан объект).
+  `GET /api/tax-check?owner_inn&object_id` шлёт ДВА запроса на `integration.facturas_url`
+  (get-facturas-by-inn): buyer = ИНН заказчика объекта и buyer = ИНН генподрядчика,
+  seller = ИНН владельца ТС, период `facturas_months` (деф. 3 мес) назад от сегодня.
+  ИНН-ы объектов — в cameras.yaml (objects[].zakazchik_inn / construction_inn /
+  object_index). «Фактур не найдено» = владелец ТС не связан с объектом финансово.
 - **API интеграции (v1)** для внешней системы (web/app.py; полная дока — docs/API_INTEGRATION.md):
   `GET /api/v1/faces` (события лиц), `GET /api/v1/persons` (уникальные люди, агрегация),
   `GET /api/v1/vehicles` (транспорт). Фильтры: object_id, camera_id, person/plate/valid,

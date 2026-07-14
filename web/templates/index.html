@@ -408,7 +408,7 @@ async function loadVehicles() {
       <td>${r.zone||""}</td>
       <td>${r.confidence ?? ""}</td>
       <td>${status}</td>
-      <td><button class="tab" style="padding:4px 10px" onclick="showGai('${r.plate}')">ГАИ</button></td>
+      <td><button class="tab" style="padding:4px 10px" onclick="showGai('${r.plate}','${r.object_id||""}')">ГАИ</button></td>
       <td><button class="del" onclick="delVehicle('${r.plate}')">✕</button></td>
     </tr>`;
   }).join("");
@@ -427,12 +427,15 @@ function gaiRow(label, val) {
   return `<tr><td class="muted" style="white-space:nowrap">${label}</td><td>${esc(val)}</td></tr>`;
 }
 
-async function showGai(plate) {
+let _gaiCtx = null;   // {plate, objectId, ownerInn} — контекст для «Сверки с налогом»
+
+async function showGai(plate, objectId) {
   const m = document.getElementById("gaiModal");
   const body = document.getElementById("gaiBody");
   document.getElementById("gaiTitle").textContent = "ГАИ — " + plate;
   body.innerHTML = "Запрос в ГАИ…";
   m.classList.remove("hidden");
+  _gaiCtx = null;
   let d;
   try {
     const r = await fetch("/api/gai/" + encodeURIComponent(plate));
@@ -476,7 +479,69 @@ async function showGai(plate) {
       gaiRow("Отметки", v.specNotes) +
       `</table>`;
   }
+  // «Сверка с налогом» — только если у владельца есть ИНН организации и известен объект
+  if (d.pOrganizationInn && objectId && objectId !== "default") {
+    _gaiCtx = {plate, objectId, ownerInn: String(d.pOrganizationInn)};
+    html += `<div style="margin-top:14px">
+      <button class="tab" style="border-color:var(--accent);color:var(--accent)"
+              onclick="taxCheck()">⚖ Сверка с налогом</button>
+    </div><div id="gaiTax" style="margin-top:10px"></div>`;
+  } else if (d.pOrganizationInn) {
+    html += `<div class="muted" style="margin-top:10px">Сверка с налогом недоступна:
+      у события не указан объект.</div>`;
+  } else {
+    html += `<div class="muted" style="margin-top:10px">Сверка с налогом недоступна:
+      у владельца нет ИНН организации (физлицо).</div>`;
+  }
   body.innerHTML = html;
+}
+
+function fmtMoney(x) {
+  return (x === null || x === undefined) ? "" : Number(x).toLocaleString("ru-RU");
+}
+
+async function taxCheck() {
+  if (!_gaiCtx) return;
+  const box = document.getElementById("gaiTax");
+  box.innerHTML = "Запрос фактур…";
+  let d;
+  try {
+    const r = await fetch(`/api/tax-check?owner_inn=${encodeURIComponent(_gaiCtx.ownerInn)}&object_id=${encodeURIComponent(_gaiCtx.objectId)}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      box.innerHTML = `<span style="color:var(--new)">Ошибка: ${esc(err.detail || r.status)}</span>`;
+      return;
+    }
+    d = await r.json();
+  } catch (e) {
+    box.innerHTML = `<span style="color:var(--new)">Сеть: ${esc(e)}</span>`;
+    return;
+  }
+  let html = `<div class="muted">Объект: ${esc(d.object_name)} · владелец ИНН ${esc(d.owner_inn)} ·
+              период ${esc(d.start_date)} — ${esc(d.end_date)}</div>`;
+  for (const c of d.checks) {
+    html += `<h4 style="margin:12px 0 6px;color:var(--txt)">${esc(c.role)} (ИНН ${esc(c.buyer_inn || "—")})`;
+    if (c.error) {
+      html += ` — <span style="color:var(--new)">${esc(c.error)}</span></h4>`;
+      continue;
+    }
+    const n = c.facturas.length;
+    html += n
+      ? ` — <span class="badge seen">фактур: ${n}</span></h4>`
+      : ` — <span class="badge new">фактур не найдено</span></h4>`;
+    if (n) {
+      html += `<table style="width:100%"><thead><tr>
+        <th>№</th><th>Дата</th><th>Договор</th><th>Продавец</th><th>Сумма с НДС</th>
+        </tr></thead><tbody>`;
+      for (const f of c.facturas) {
+        html += `<tr><td>${esc(f.facturaNo)}</td><td>${esc(f.facturaDate)}</td>
+          <td>${esc(f.contractNo)}</td><td>${esc(f.sellerName)}</td>
+          <td style="white-space:nowrap">${fmtMoney(f.deliverySumWithVat)}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+  }
+  box.innerHTML = html;
 }
 
 async function delPerson(label) {

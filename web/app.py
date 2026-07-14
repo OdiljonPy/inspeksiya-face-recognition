@@ -232,7 +232,8 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
     if not os.path.exists(DB_PATH):
         return JSONResponse([])
     sql = ("SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
-           "confidence, snapshot_path, valid, region_uncertain, full_path FROM vehicle_events")
+           "confidence, snapshot_path, valid, region_uncertain, full_path, object_id "
+           "FROM vehicle_events")
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
@@ -258,6 +259,7 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "plate_url": _plate_url(r["snapshot_path"]),
                     "full_url": _full_url(r["full_path"]),
                     "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
+                    "object_id": r["object_id"] or "default",
                 })
     except sqlite3.OperationalError:
         return JSONResponse([])   # таблицы ещё нет
@@ -652,6 +654,20 @@ _GAI_CACHE: dict[str, tuple[float, dict]] = {}
 _GAI_LOCK = threading.Lock()
 
 
+def _post_json(url: str, payload: dict, timeout: float) -> dict:
+    """POST JSON во внешний сервис. Ошибки -> HTTPException 502 (для фронта)."""
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"внешний сервис ответил ошибкой: HTTP {e.code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"внешний сервис недоступен: {e}")
+
+
 @app.get("/api/gai/{plate}")
 def api_gai(plate: str):
     """Инфо о владельце ТС по номеру (прокси к сервису ГАИ из settings.integration)."""
@@ -668,19 +684,59 @@ def api_gai(plate: str):
         hit = _GAI_CACHE.get(plate)
         if hit and now - hit[0] < ttl:
             return hit[1]
-    req = urllib.request.Request(
-        url, data=json.dumps({"plate_number": plate}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=float(icfg.get("gai_timeout", 12))) as r:
-            data = json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"сервис ГАИ ответил ошибкой: HTTP {e.code}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"сервис ГАИ недоступен: {e}")
+    data = _post_json(url, {"plate_number": plate}, float(icfg.get("gai_timeout", 12)))
     with _GAI_LOCK:
         _GAI_CACHE[plate] = (now, data)
     return data
+
+
+@app.get("/api/tax-check")
+def api_tax_check(owner_inn: str = Query(..., description="ИНН владельца ТС (из ГАИ)"),
+                  object_id: str = Query(..., description="объект (стройплощадка)")):
+    """
+    Сверка с налогом: были ли счета-фактуры между владельцем ТС (продавец) и
+    ИНН-ами объекта (покупатели: заказчик и генподрядчик) за последние N месяцев.
+    Два запроса к integration.facturas_url, период — facturas_months назад от сегодня.
+    """
+    owner_inn = owner_inn.strip()
+    if not owner_inn.isdigit():
+        raise HTTPException(status_code=422, detail=f"ИНН владельца не числовой: {owner_inn!r}")
+    icfg = cfg.get("integration", {}) or {}
+    url = icfg.get("facturas_url", "")
+    if not url:
+        raise HTTPException(status_code=503, detail="integration.facturas_url не настроен")
+    obj = next((o for o in load_objects() if o["id"] == object_id), None)
+    if obj is None:
+        raise HTTPException(status_code=404, detail=f"объект {object_id!r} не найден в cameras.yaml")
+
+    months = int(icfg.get("facturas_months", 3))
+    end = datetime.now()
+    m = end.month - months
+    y = end.year + (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    import calendar
+    start = end.replace(year=y, month=m, day=min(end.day, calendar.monthrange(y, m)[1]))
+    start_s, end_s = start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
+
+    timeout = float(icfg.get("gai_timeout", 12))
+    checks = []
+    for role, buyer in (("Заказчик", obj.get("zakazchik_inn")),
+                        ("Генподрядчик", obj.get("construction_inn"))):
+        if not buyer:
+            checks.append({"role": role, "buyer_inn": None,
+                           "error": f"ИНН не задан у объекта в cameras.yaml"})
+            continue
+        payload = {"buyer_inn": int(buyer), "seller_inn": int(owner_inn),
+                   "start_date": start_s, "end_date": end_s}
+        try:
+            data = _post_json(url, payload, timeout)
+            checks.append({"role": role, "buyer_inn": str(buyer),
+                           "facturas": data.get("facturas", []) or []})
+        except HTTPException as e:
+            checks.append({"role": role, "buyer_inn": str(buyer), "error": e.detail})
+    return {"owner_inn": owner_inn, "object_id": object_id,
+            "object_name": obj.get("name", object_id),
+            "start_date": start_s, "end_date": end_s, "checks": checks}
 
 
 # ============================ LIVE (просмотр камеры с боксами) ============================
