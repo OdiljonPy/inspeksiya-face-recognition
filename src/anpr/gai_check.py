@@ -19,6 +19,22 @@ import urllib.request
 import urllib.error
 
 
+def check_plate(url: str, plate: str, timeout: float) -> str:
+    """Один запрос в ГАИ. Возвращает статус: found | not_found | error."""
+    req = urllib.request.Request(
+        url, data=json.dumps({"plate_number": plate}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return "found" if data.get("pResult") == 1 else "not_found"
+    except urllib.error.HTTPError as e:
+        # по договорённости: 404/500 от сервиса = машины нет в базе ГАИ
+        return "not_found" if e.code in (404, 500) else "error"
+    except Exception:
+        return "error"                             # таймаут/сеть — статус неизвестен
+
+
 class GaiChecker(threading.Thread):
     def __init__(self, url: str, timeout: float, vlog, cache_ttl: float = 3600.0):
         super().__init__(daemon=True, name="gai-check")
@@ -38,18 +54,7 @@ class GaiChecker(threading.Thread):
             pass
 
     def _check(self, plate: str) -> str:
-        req = urllib.request.Request(
-            self.url, data=json.dumps({"plate_number": plate}).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                data = json.loads(r.read().decode("utf-8"))
-            return "found" if data.get("pResult") == 1 else "not_found"
-        except urllib.error.HTTPError as e:
-            # по договорённости: 404/500 от сервиса = машины нет в базе ГАИ
-            return "not_found" if e.code in (404, 500) else "error"
-        except Exception:
-            return "error"                         # таймаут/сеть — статус неизвестен
+        return check_plate(self.url, plate, self.timeout)
 
     def run(self):
         while True:

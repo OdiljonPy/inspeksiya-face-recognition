@@ -258,6 +258,8 @@ python scripts/migrate_objects.py
 python scripts/fix_object_ids.py          # разово: старые события avloniy -> obj_avloniy
 python scripts/revalidate_plates.py       # перефлаговать номера по текущим правилам
                                           # (--purge-invalid — удалить мусорные события)
+python scripts/backfill_gai_status.py     # разово: проверить СТАРЫЕ события по базе ГАИ
+                                          # (--retry-errors / --all — перепроверка)
 sudo systemctl restart face-recognition face-dashboard
 journalctl -u face-recognition -f
 ```
