@@ -149,7 +149,7 @@ def index():
 
 @app.get("/api/objects")
 def api_objects():
-    """Список объектов (стройплощадок) для фильтра."""
+    """Список объектов (стройплощадок) для фильтра + реквизиты из cameras.yaml."""
     objs = []
     if os.path.exists(DB_PATH):
         with _db() as conn:
@@ -163,6 +163,13 @@ def api_objects():
         for o in load_objects():
             objs.append({"id": o["id"], "name": o.get("name", o["id"]),
                          "address": o.get("address", "")})
+    # реквизиты (ИНН заказчика/генподрядчика, индекс) — всегда из конфига
+    extras = {o["id"]: o for o in load_objects()}
+    for obj in objs:
+        e = extras.get(obj["id"], {})
+        obj["object_index"] = e.get("object_index")
+        obj["construction_inn"] = str(e.get("construction_inn") or "")
+        obj["zakazchik_inn"] = str(e.get("zakazchik_inn") or "")
     return objs
 
 

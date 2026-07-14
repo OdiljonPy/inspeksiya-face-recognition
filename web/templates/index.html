@@ -323,10 +323,13 @@ function fmtTime(ts) {
 
 function currentObject() { return document.getElementById("objectFilter").value; }
 
+let _objectsById = {};   // id -> объект (с ИНН заказчика/генподрядчика) для сверок
+
 async function loadObjects() {
   const sel = document.getElementById("objectFilter");
   const cur = sel.value;
   const objs = await (await fetch("/api/objects")).json();
+  _objectsById = Object.fromEntries(objs.map(o => [o.id, o]));
   sel.innerHTML = '<option value="">Все объекты</option>' +
     objs.map(o => `<option value="${o.id}">${o.name}</option>`).join("");
   sel.value = cur;
@@ -454,7 +457,18 @@ async function showGai(plate, objectId) {
     return;
   }
   const ownerType = d.pOwnerType === 1 ? "юрлицо" : (d.pOwnerType === 2 ? "физлицо" : d.pOwnerType);
-  let html = `<table style="width:100%">` +
+  let html = "";
+  // ЯРКАЯ пометка: ИНН владельца ТС совпадает с ИНН генподрядчика объекта
+  const obj = _objectsById[objectId];
+  const ownerInnStr = d.pOrganizationInn ? String(d.pOrganizationInn) : "";
+  if (obj && ownerInnStr && obj.construction_inn && ownerInnStr === String(obj.construction_inn)) {
+    html += `<div style="background:rgba(70,211,154,.18);border:2px solid var(--ok);
+                color:var(--ok);padding:12px 14px;border-radius:10px;font-weight:700;
+                font-size:15px;margin-bottom:12px">
+      ✔ МАШИНА ПРИНАДЛЕЖИТ ГЕНПОДРЯДЧИКУ объекта «${esc(obj.name)}»
+      (ИНН владельца совпадает: ${esc(ownerInnStr)})</div>`;
+  }
+  html += `<table style="width:100%">` +
     gaiRow("Владелец", d.pOwner) +
     gaiRow("Тип владельца", ownerType) +
     gaiRow("ИНН организации", d.pOrganizationInn) +
