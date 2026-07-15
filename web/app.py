@@ -198,9 +198,10 @@ def api_cameras(object: str = Query("", description="фильтр по объе�
 @app.get("/api/events")
 def api_events(camera: str = Query("", description="фильтр по camera_id"),
                object: str = Query("", description="фильтр по объекту"),
-               limit: int = Query(100, ge=1, le=1000)):
+               limit: int = Query(100, ge=1, le=1000),
+               offset: int = Query(0, ge=0)):
     if not os.path.exists(DB_PATH):
-        return JSONResponse([])
+        return {"total": 0, "items": []}
     q = ("SELECT id, ts, camera_id, zone, person, score, is_new, crop_path, full_path, "
          "uncertain FROM events")
     where, params = [], []
@@ -208,14 +209,13 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
         where.append("camera_id = ?"); params.append(camera)
     if object:
         where.append("object_id = ?"); params.append(object)
-    if where:
-        q += " WHERE " + " AND ".join(where)
-    q += " ORDER BY ts DESC LIMIT ?"
-    params.append(limit)
+    cond = (" WHERE " + " AND ".join(where)) if where else ""
+    q += cond + " ORDER BY ts DESC LIMIT ? OFFSET ?"
 
     out = []
     with _db() as conn:
-        for r in conn.execute(q, params):
+        total = conn.execute("SELECT COUNT(*) FROM events" + cond, params).fetchone()[0]
+        for r in conn.execute(q, params + [limit, offset]):
             out.append({
                 "id": r["id"],
                 "ts": r["ts"],
@@ -228,7 +228,7 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
                 "face_url": _face_url(r["crop_path"]),
                 "full_url": _full_url(r["full_path"]),
             })
-    return out
+    return {"total": total, "items": out}
 
 
 @app.get("/api/vehicle_events")
@@ -237,9 +237,10 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                        q: str = Query("", description="поиск по номеру (подстрока)"),
                        valid: str = Query("", description="'1' — валидные, '0' — невалидные, '' — все"),
                        gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
-                       limit: int = Query(100, ge=1, le=1000)):
+                       limit: int = Query(100, ge=1, le=1000),
+                       offset: int = Query(0, ge=0)):
     if not os.path.exists(DB_PATH):
-        return JSONResponse([])
+        return {"total": 0, "items": []}
     sql = ("SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
            "confidence, snapshot_path, valid, region_uncertain, full_path, object_id, "
            "gai_status FROM vehicle_events")
@@ -256,14 +257,15 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
         where.append("gai_status = ?"); params.append(gai)
     elif gai == "unchecked":
         where.append("(gai_status IS NULL OR gai_status = '')")
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY timestamp DESC LIMIT ?"; params.append(limit)
+    cond = (" WHERE " + " AND ".join(where)) if where else ""
+    sql += cond + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
 
     out = []
     try:
         with _db() as conn:
-            for r in conn.execute(sql, params):
+            total = conn.execute("SELECT COUNT(*) FROM vehicle_events" + cond,
+                                 params).fetchone()[0]
+            for r in conn.execute(sql, params + [limit, offset]):
                 out.append({
                     "id": r["id"], "ts": r["timestamp"],
                     "camera_id": r["camera_id"], "zone": r["zone"],
@@ -276,8 +278,8 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "gai_status": r["gai_status"] or "",
                 })
     except sqlite3.OperationalError:
-        return JSONResponse([])   # таблицы ещё нет
-    return out
+        return {"total": 0, "items": []}   # таблицы ещё нет
+    return {"total": total, "items": out}
 
 
 @app.get("/api/gallery")

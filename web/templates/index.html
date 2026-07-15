@@ -57,17 +57,17 @@
     <div class="tab" data-tab="analytics" onclick="switchTab('analytics')">Аналитика</div>
   </div>
   <div class="spacer"></div>
-  <input id="plateSearch" class="hidden" placeholder="Поиск по номеру…" oninput="loadVehicles()"
+  <input id="plateSearch" class="hidden" placeholder="Поиск по номеру…" oninput="pagerReset('vehicles');loadVehicles()"
          style="background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 10px">
   <label class="muted hidden" id="statusFilterWrap">Статус:&nbsp;
-    <select id="statusFilter" onchange="loadVehicles()">
+    <select id="statusFilter" onchange="pagerReset('vehicles');loadVehicles()">
       <option value="1" selected>OK (валидные)</option>
       <option value="0">Невалидные</option>
       <option value="">Все</option>
     </select>
   </label>
   <label class="muted hidden" id="gaiFilterWrap">ГАИ:&nbsp;
-    <select id="gaiFilter" onchange="loadVehicles()">
+    <select id="gaiFilter" onchange="pagerReset('vehicles');loadVehicles()">
       <option value="" selected>Все</option>
       <option value="found">Есть в базе</option>
       <option value="not_found">Нет в базе</option>
@@ -79,7 +79,7 @@
     <select id="objectFilter" onchange="onObjectChange()"><option value="">Все объекты</option></select>
   </label>
   <label class="muted">Камера:&nbsp;
-    <select id="cameraFilter" onchange="refresh()"><option value="">Все</option></select>
+    <select id="cameraFilter" onchange="pagerReset();refresh()"><option value="">Все</option></select>
   </label>
   <span class="muted" id="status">—</span>
 </header>
@@ -94,6 +94,7 @@
       <tbody id="eventsBody"></tbody>
     </table>
     <div id="eventsEmpty" class="empty hidden">Событий пока нет. Запусти <code>python src\main.py</code>.</div>
+    <div id="eventsPager" class="muted" style="display:flex;gap:10px;align-items:center;padding:12px 0"></div>
   </section>
 
   <section id="view-gallery" class="hidden">
@@ -110,6 +111,7 @@
       <tbody id="vehiclesBody"></tbody>
     </table>
     <div id="vehiclesEmpty" class="empty hidden">Событий транспорта пока нет. Нужна камера с mode: plate/both.</div>
+    <div id="vehiclesPager" class="muted" style="display:flex;gap:10px;align-items:center;padding:12px 0"></div>
   </section>
 
   <section id="view-live" class="hidden">
@@ -356,17 +358,61 @@ async function loadCameras() {
 }
 
 async function onObjectChange() {   // смена объекта -> перечитать список камер (его) и обновить вид
+  pagerReset();
   await loadCameras();
   if (currentTab === "live") loadLiveCameras();
   refresh();
 }
 
+// ---------- Пагинация (События и Транспорт) ----------
+const pager = {events: {page: 0, size: 50}, vehicles: {page: 0, size: 50}};
+
+function pagerReset(which) {
+  if (!which || which === "events") pager.events.page = 0;
+  if (!which || which === "vehicles") pager.vehicles.page = 0;
+}
+
+function pagerMove(which, delta) {
+  pager[which].page = Math.max(0, pager[which].page + delta);
+  (which === "events" ? loadEvents : loadVehicles)();
+}
+
+function pagerSize(which, size) {
+  pager[which].size = parseInt(size, 10);
+  pager[which].page = 0;
+  (which === "events" ? loadEvents : loadVehicles)();
+}
+
+function renderPager(which, total) {
+  const p = pager[which];
+  const pages = Math.max(1, Math.ceil(total / p.size));
+  if (p.page >= pages) p.page = pages - 1;            // фильтр сузил выборку — вернуться в диапазон
+  const from = total ? p.page * p.size + 1 : 0;
+  const to = Math.min(total, (p.page + 1) * p.size);
+  document.getElementById(which + "Pager").innerHTML = total <= 0 ? "" : `
+    <button class="tab" ${p.page === 0 ? "disabled style='opacity:.4'" : ""}
+            onclick="pagerMove('${which}', -1)">← Назад</button>
+    <span>${from}–${to} из ${total} · стр. ${p.page + 1}/${pages}</span>
+    <button class="tab" ${p.page >= pages - 1 ? "disabled style='opacity:.4'" : ""}
+            onclick="pagerMove('${which}', 1)">Вперёд →</button>
+    <label>На странице:
+      <select onchange="pagerSize('${which}', this.value)">
+        ${[25, 50, 100, 200].map(s =>
+          `<option value="${s}" ${s === p.size ? "selected" : ""}>${s}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
 async function loadEvents() {
   const cam = document.getElementById("cameraFilter").value;
-  const rows = await (await fetch("/api/events?limit=200&camera=" + encodeURIComponent(cam) +
-                                  "&object=" + encodeURIComponent(currentObject()))).json();
+  const p = pager.events;
+  const d = await (await fetch("/api/events?limit=" + p.size + "&offset=" + (p.page * p.size) +
+                               "&camera=" + encodeURIComponent(cam) +
+                               "&object=" + encodeURIComponent(currentObject()))).json();
+  const rows = d.items;
   const body = document.getElementById("eventsBody");
-  document.getElementById("eventsEmpty").classList.toggle("hidden", rows.length > 0);
+  document.getElementById("eventsEmpty").classList.toggle("hidden", d.total > 0);
+  renderPager("events", d.total);
   body.innerHTML = rows.map(r => `
     <tr>
       <td>${r.face_url ? `<img class="thumb" src="${r.face_url}">` : "—"}</td>
@@ -380,7 +426,7 @@ async function loadEvents() {
                      : '<span class="badge seen">замечен</span>'}</td>
     </tr>`).join("");
   document.getElementById("status").textContent =
-    "событий: " + rows.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+    "событий: " + d.total + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
 }
 
 async function loadGallery() {
@@ -406,9 +452,12 @@ async function loadVehicles() {
   const q = document.getElementById("plateSearch").value.trim();
   const status = document.getElementById("statusFilter").value;
   const gai = document.getElementById("gaiFilter").value;
-  const rows = await (await fetch(`/api/vehicle_events?limit=200&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}`)).json();
+  const p = pager.vehicles;
+  const d = await (await fetch(`/api/vehicle_events?limit=${p.size}&offset=${p.page * p.size}&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}`)).json();
+  const rows = d.items;
   const body = document.getElementById("vehiclesBody");
-  document.getElementById("vehiclesEmpty").classList.toggle("hidden", rows.length > 0);
+  document.getElementById("vehiclesEmpty").classList.toggle("hidden", d.total > 0);
+  renderPager("vehicles", d.total);
   body.innerHTML = rows.map(r => {
     let status = r.valid ? '<span class="badge seen">OK</span>'
                : (r.region_uncertain ? '<span class="badge new">регион?</span>'
@@ -433,7 +482,7 @@ async function loadVehicles() {
     </tr>`;
   }).join("");
   document.getElementById("status").textContent =
-    "номеров: " + rows.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+    "номеров: " + d.total + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
 }
 
 // ---------- ГАИ: инфо о владельце ТС по номеру ----------
