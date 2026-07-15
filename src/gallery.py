@@ -175,7 +175,8 @@ class Gallery:
         crop = self._crop_face(frame, bbox)
         crop_path = os.path.join(self.faces_dir, f"{label}.jpg")
         if crop is not None:
-            cv2.imwrite(crop_path, crop)
+            cv2.imwrite(crop_path, _enhance_gallery_crop(crop),
+                        [cv2.IMWRITE_JPEG_QUALITY, 97])
 
         ident = Identity(idx=idx, label=label,
                          crop_path=os.path.relpath(crop_path, _project_root()),
@@ -260,6 +261,25 @@ class Gallery:
 
     def count(self) -> int:
         return len(self.identities)
+
+
+def _enhance_gallery_crop(crop, target_min: int = 256, max_scale: float = 2.5):
+    """
+    Подготовить снимок лица для галереи. Кропы с камер мелкие (~100-180px),
+    браузер растягивает их мыльно. Апскейлим сами качественным фильтром
+    (LANCZOS4) + лёгкое повышение резкости. Деталей это не добавляет, но
+    фото в дашборде выглядит заметно чище. Крупные кропы не трогаем.
+    """
+    h, w = crop.shape[:2]
+    m = min(h, w)
+    if m >= target_min:
+        return crop
+    s = min(max_scale, target_min / m)
+    up = cv2.resize(crop, (int(round(w * s)), int(round(h * s))),
+                    interpolation=cv2.INTER_LANCZOS4)
+    # unsharp mask: мягко вернуть контуры после интерполяции
+    blur = cv2.GaussianBlur(up, (0, 0), 1.2)
+    return cv2.addWeighted(up, 1.35, blur, -0.35, 0)
 
 
 # ----------------------------- утилиты качества -----------------------------
