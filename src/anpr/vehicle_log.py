@@ -62,6 +62,9 @@ class VehicleLog:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_cam ON vehicle_events(camera_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_plate ON vehicle_events(plate_normalized)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_obj ON vehicle_events(object_id)")
+        # под фильтры дашборда (статус/ГАИ) на больших базах
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_valid ON vehicle_events(valid)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_gai ON vehicle_events(gai_status)")
         self.conn.commit()
 
     def log(self, camera_id, zone, plate_text, plate_normalized, confidence,

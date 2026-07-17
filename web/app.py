@@ -366,25 +366,38 @@ def api_edit_plate(event_id: int, plate: str = Query(..., description="новы�
             "valid": pp.valid, "region_uncertain": pp.region_uncertain}
 
 
+def _remove_file(path: str):
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 @app.delete("/api/vehicle/{plate}")
 def api_delete_vehicle(plate: str):
-    """Удалить ВСЕ события транспорта по номеру + их кропы из data/plates/."""
+    """Удалить ВСЕ события транспорта по номеру + кропы и полные кадры."""
     plate = plate.upper()
     if not os.path.exists(DB_PATH):
         raise HTTPException(status_code=404, detail="Нет базы событий")
     with _db() as conn:
         rows = conn.execute(
-            "SELECT snapshot_path FROM vehicle_events WHERE plate_normalized = ?",
+            "SELECT id, snapshot_path, full_path FROM vehicle_events WHERE plate_normalized = ?",
             (plate,)).fetchall()
         if not rows:
             raise HTTPException(status_code=404, detail=f"Номер {plate} не найден")
+        ids = [r["id"] for r in rows]
         for r in rows:
-            sp = r["snapshot_path"]
-            if sp and os.path.exists(sp):
-                try:
-                    os.remove(sp)
-                except OSError:
-                    pass
+            _remove_file(r["snapshot_path"])
+            fp = r["full_path"]
+            if fp:
+                # полный кадр может делиться с ДРУГИМ номером в том же кадре
+                ph = ",".join("?" * len(ids))
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM vehicle_events WHERE full_path=? AND id NOT IN ({ph})",
+                    [fp] + ids).fetchone()[0]
+                if n == 0:
+                    _remove_file(fp)
         cur = conn.execute("DELETE FROM vehicle_events WHERE plate_normalized = ?", (plate,))
         conn.commit()
     return {"deleted": plate, "events_deleted": cur.rowcount}
@@ -590,7 +603,7 @@ def api_v1_faces(request: Request,
         total = conn.execute(f"SELECT COUNT(*) FROM events{cond}", params).fetchone()[0]
         rows = conn.execute(
             "SELECT id, ts, camera_id, zone, person, score, is_new, uncertain, "
-            f"crop_path, full_path, object_id FROM events{cond} "
+            f"crop_path, full_path, object_id, q_det, q_px, q_blur, q_yaw FROM events{cond} "
             "ORDER BY ts DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
     items = [{
         "id": r["id"], "ts": r["ts"], "datetime": _iso(r["ts"]),
@@ -601,6 +614,7 @@ def api_v1_faces(request: Request,
         "person": r["person"],
         "score": round(r["score"], 3) if r["score"] is not None else None,
         "is_new": bool(r["is_new"]), "uncertain": bool(r["uncertain"]),
+        "q_det": r["q_det"], "q_px": r["q_px"], "q_blur": r["q_blur"], "q_yaw": r["q_yaw"],
         "face_url": _abs(request, _face_url(r["crop_path"])),
         "full_url": _abs(request, _full_url(r["full_path"])),
     } for r in rows]
@@ -728,6 +742,70 @@ def _plate_validator():
         from anpr.plate_format import PlateValidator
         _PLATE_VALIDATOR = PlateValidator(cfg["anpr"]["plate_regex"])
     return _PLATE_VALIDATOR
+
+
+# ---------- DELETE (интеграция v1): транспорт и галерея ----------
+
+@app.delete("/api/v1/vehicles/plate/{plate}")
+def api_v1_delete_vehicle_by_plate(plate: str):
+    """Удалить ВСЕ события транспорта по номеру (эквивалент ✕ в дашборде)."""
+    return api_delete_vehicle(plate)
+
+
+@app.delete("/api/v1/vehicles/{event_id}")
+def api_v1_delete_vehicle_event(event_id: int):
+    """Удалить ОДНО событие транспорта (+ его кроп; полный кадр — если не делится)."""
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(status_code=404, detail="нет базы событий")
+    with _db() as conn:
+        r = conn.execute("SELECT snapshot_path, full_path FROM vehicle_events WHERE id=?",
+                         (event_id,)).fetchone()
+        if r is None:
+            raise HTTPException(status_code=404, detail=f"событие {event_id} не найдено")
+        _remove_file(r["snapshot_path"])
+        fp = r["full_path"]
+        if fp:
+            n = conn.execute("SELECT COUNT(*) FROM vehicle_events WHERE full_path=? AND id!=?",
+                             (fp, event_id)).fetchone()[0]
+            if n == 0:
+                _remove_file(fp)
+        conn.execute("DELETE FROM vehicle_events WHERE id=?", (event_id,))
+        conn.commit()
+    return {"deleted": event_id}
+
+
+@app.delete("/api/v1/persons/{label}")
+def api_v1_delete_person(label: str):
+    """Удалить человека из галереи + ВСЕ его события лиц (эквивалент ✕ в дашборде)."""
+    return api_delete_person(label)
+
+
+@app.delete("/api/v1/faces/{event_id}")
+def api_v1_delete_face_event(event_id: int):
+    """
+    Удалить ОДНО событие лица. Снимок из галереи (person_XXXX.jpg) НЕ трогаем —
+    он общий для человека; удаляются только LOW_QUALITY-кроп события и полный
+    кадр (если на него не ссылаются другие события того же кадра).
+    """
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(status_code=404, detail="нет базы событий")
+    with _db() as conn:
+        r = conn.execute("SELECT crop_path, full_path FROM events WHERE id=?",
+                         (event_id,)).fetchone()
+        if r is None:
+            raise HTTPException(status_code=404, detail=f"событие {event_id} не найдено")
+        crop = (r["crop_path"] or "").replace("\\", "/")
+        if "/lowq/" in crop or crop.startswith("lowq/"):
+            _remove_file(r["crop_path"])
+        fp = r["full_path"]
+        if fp:
+            n = conn.execute("SELECT COUNT(*) FROM events WHERE full_path=? AND id!=?",
+                             (fp, event_id)).fetchone()[0]
+            if n == 0:
+                _remove_file(fp)
+        conn.execute("DELETE FROM events WHERE id=?", (event_id,))
+        conn.commit()
+    return {"deleted": event_id}
 
 
 # ==================== ИНТЕГРАЦИЯ ГАИ (владелец ТС по номеру) ====================

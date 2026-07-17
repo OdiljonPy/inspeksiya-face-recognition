@@ -222,6 +222,11 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   с объектом финансово. Если ИНН владельца ТС СОВПАДАЕТ с construction_inn объекта —
   вверху модалки ГАИ яркий зелёный баннер «МАШИНА ПРИНАДЛЕЖИТ ГЕНПОДРЯДЧИКУ»
   (проверка на фронте: /api/objects отдаёт ИНН-ы объектов из cameras.yaml).
+- **API интеграции v1 — DELETE (15.07.2026)**: DELETE /api/v1/vehicles/{id},
+  /api/v1/vehicles/plate/{plate}, /api/v1/faces/{id}, /api/v1/persons/{label}.
+  Общие полные кадры (несколько лиц/номеров в одном кадре) удаляются только когда
+  не осталось ссылок; фото галереи при удалении события лица не трогается.
+  В v1/faces добавлены q_* метрики; в v1/vehicles — gai_status + фильтр gai=.
 - **API интеграции (v1)** для внешней системы (web/app.py; полная дока — docs/API_INTEGRATION.md):
   `GET /api/v1/faces` (события лиц), `GET /api/v1/persons` (уникальные люди, агрегация),
   `GET /api/v1/vehicles` (транспорт). Фильтры: object_id, camera_id, person/plate/valid,

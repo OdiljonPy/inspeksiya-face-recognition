@@ -63,6 +63,7 @@ GET /api/v1/faces?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-12&
   "score": 0.72,
   "is_new": true,
   "uncertain": false,
+  "q_det": null, "q_px": null, "q_blur": null, "q_yaw": null,
   "face_url": "http://<host>/faces/person_0001.jpg?v=1783657800",
   "full_url": "http://<host>/full/1783657800000_cam03.jpg?v=1783657800"
 }
@@ -185,6 +186,19 @@ curl:
 curl "http://<host>:8089/api/v1/persons?object_id=obj_avloniy&date_from=2026-07-01"
 curl "http://<host>:8089/api/v1/vehicles?plate=S772&valid=1"
 ```
+
+---
+
+## Удаление (DELETE)
+
+```
+DELETE /api/v1/vehicles/{event_id}        # одно событие транспорта (+ его кроп)
+DELETE /api/v1/vehicles/plate/{plate}     # ВСЕ события номера (+ кропы и полные кадры)
+DELETE /api/v1/faces/{event_id}           # одно событие лица (фото галереи НЕ трогается)
+DELETE /api/v1/persons/{label}            # человек из галереи + ВСЕ его события
+```
+Полные кадры, на которые ссылаются другие события (несколько лиц/номеров в одном
+кадре), не удаляются, пока жива хоть одна ссылка. Несуществующий id/номер → 404.
 
 ---
 
