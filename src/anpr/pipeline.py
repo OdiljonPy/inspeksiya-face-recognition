@@ -11,7 +11,7 @@ import time
 
 import cv2
 
-from anpr.plate_format import PlateValidator
+from anpr.plate_format import PlateValidator, owner_type_from_body
 
 
 def _safe_name(s: str) -> str:
@@ -57,6 +57,9 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
             snapshot_path="", dedup_key=dedup_key,
             valid=pp.valid, region_uncertain=pp.region_uncertain, ts=ts,
             object_id=object_id,
+            # базовый тип владельца по формату тела ("A123BC"=физлицо, "123ABC"=юрлицо);
+            # фоновая проверка ГАИ уточнит его (в т.ч. kompaniya по ИНН генподрядчика)
+            owner_type=owner_type_from_body(pp.body),
         ) if vlog is not None else None
         logged = rowid is not None
 
@@ -86,9 +89,10 @@ def process_frame(engine, validator: PlateValidator, vlog, frame, cam_id, zone,
                     cv2.imwrite(snapshot_path, crop)
                     vlog.set_snapshot(rowid, snapshot_path)
         # НОВОЕ событие -> фоновая проверка по базе ГАИ (после коррекции региона,
-        # чтобы отправить исправленный номер; сам запрос — в отдельном потоке)
+        # чтобы отправить исправленный номер; сам запрос — в отдельном потоке).
+        # object_id нужен проверке для kompaniya (ИНН генподрядчика) и сверки с налогом.
         if logged and gai_checker is not None:
-            gai_checker.enqueue(rowid, normalized)
+            gai_checker.enqueue(rowid, normalized, object_id)
         # полный кадр события (общий вид машины) — только для новых событий
         if logged and full_dir:
             os.makedirs(full_dir, exist_ok=True)

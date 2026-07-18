@@ -112,6 +112,8 @@ GET /api/v1/vehicles
 | `plate` | поиск по номеру (подстрока, регистр не важен) |
 | `valid` | `1` — только валидные по формату РУз, `0` — только невалидные |
 | `gai` | статус проверки по базе ГАИ: `found` / `not_found` (машины нет в базе) / `error` / `unchecked` |
+| `owner_type` | тип владельца: `shaxsiy` (физлицо) / `yuridik` (юрлицо) / `kompaniya` (машина генподрядчика объекта) / `unknown` (не определён) |
+| `has_contract` | сверка с налогом: `1` — фактуры с заказчиком/генподрядчиком есть, `0` — нет, `unchecked` — не проверялся |
 | `date_from`, `date_to` | период |
 | `limit`, `offset` | пагинация |
 
@@ -138,6 +140,9 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
   "valid": true,
   "gai_status": "found",
   "region_uncertain": false,
+  "owner_type": "yuridik",
+  "owner_inn": "301234567",
+  "has_contract": true,
   "confidence": 0.84,
   "plate_url": "http://<host>/plates/1783657800000_cam03_01S772SB.jpg?v=...",
   "full_url": "http://<host>/full/1783657800000_cam03_veh.jpg?v=..."
@@ -146,6 +151,101 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
 `plate` — нормализованный номер (регион восстановлен, если удалось),
 `plate_raw` — сырой текст OCR, `plate_url` — кроп номера, `full_url` — общее фото машины.
 Если регион прочитать не удалось — `region_uncertain: true`, тело (`body`) при этом надёжно.
+
+**`owner_type`** — тип владельца ТС:
+- `shaxsiy` — физлицо; `yuridik` — юрлицо. Базово определяется по ФОРМАТУ номера
+  (`01 A 123 BC` — физлицо, `01 123 ABC` — юрлицо), затем уточняется данными ГАИ
+  (`pOwnerType`) при фоновой проверке нового события.
+- `kompaniya` — машина принадлежит генподрядчику объекта: ИНН владельца из ГАИ
+  совпадает с `construction_inn` объекта (cameras.yaml).
+- `""` — не определён (номер не по формату РУз).
+
+**`owner_inn`** — ИНН организации-владельца из ГАИ (пусто у физлиц).
+
+**`has_contract`** — сверка с налогом (были ли счета-фактуры владелец ТС →
+заказчик/генподрядчик объекта за `integration.facturas_months`):
+`true` — фактуры есть, `false` — нет, `null` — не проверялся или неприменимо
+(физлицо без ИНН, машина генподрядчика, сервис недоступен).
+
+---
+
+## API 2а — счётчики транспорта по типу владельца
+
+```
+GET /api/v1/vehicles/stats
+```
+
+Сколько УНИКАЛЬНЫХ машин (по номеру): юрлиц, физлиц, машин генподрядчика —
+плюс разрез по сверке с налогом. Тип машины берётся из её последнего события
+под фильтром.
+
+Параметры: `object_id`, `object_index`, `camera_id`, `valid`, `date_from`, `date_to`.
+
+```
+GET /api/v1/vehicles/stats?object_id=obj_avloniy&date_from=2026-07-01
+```
+```json
+{
+  "vehicles_total": 42,
+  "events_total": 310,
+  "object_id": "obj_avloniy",
+  "object_index": 41109,
+  "by_owner_type": { "yuridik": 25, "shaxsiy": 12, "kompaniya": 3, "unknown": 2 },
+  "by_contract": { "with": 18, "without": 7, "unchecked": 17 }
+}
+```
+`by_owner_type` — число машин юрлиц / физлиц / генподрядчика / неопределённых.
+`by_contract` — машины с фактурами / без / непроверенные (машины генподрядчика
+не сверяются — попадают в `unchecked`).
+
+---
+
+## API 2б — владелец ТС по номеру (запрос в ГАИ)
+
+```
+GET /api/v1/vehicles/owner/{plate}
+```
+
+Параметры: `object_id` ИЛИ `object_index` (опционально — чтобы определить тип
+`kompaniya` по ИНН генподрядчика этого объекта).
+
+```
+GET /api/v1/vehicles/owner/01123ABC?object_index=41109
+```
+```json
+{
+  "plate": "01123ABC",
+  "found": true,
+  "owner_type": "yuridik",
+  "owner_type_source": "gai",
+  "owner_inn": "301234567",
+  "owner_name": "OOO QURILISH",
+  "object_id": "obj_avloniy",
+  "gai": { "pResult": 1, "pOwnerType": 1, "pOrganizationInn": 301234567, "...": "полный ответ ГАИ" }
+}
+```
+`owner_type_source`: `gai` — тип из базы ГАИ; `plate_format` — машины нет в базе
+(или сервис недоступен — тогда дополнительно поле `error`), тип определён по
+формату номера. Ответы ГАИ кэшируются (`integration.gai_cache_seconds`).
+Побочно обновляет `gai_status` / `owner_type` / `owner_inn` у всех событий номера.
+
+---
+
+## API 2в — сверка с налогом
+
+```
+GET /api/v1/tax-check?owner_inn=<ИНН>&object_id=<объект>[&plate=<номер>]
+```
+
+Параметры: `owner_inn` (обязателен), `object_id` ИЛИ `object_index` (обязателен
+один из них), `date_from`/`date_to` (`YYYY-MM-DD` | `DD.MM.YYYY`; по умолчанию —
+`facturas_months` месяцев назад от сегодня), `plate` (опционально — записать
+результат в `has_contract` событий этого номера на объекте).
+
+Ответ — как у `/api/tax-check` (см. ниже): `{owner_inn, owner_name, object_name,
+has_contract, start_date, end_date, checks: [{role, buyer_inn, facturas | error}]}`.
+`has_contract`: `true` — фактуры есть хотя бы с одним из ИНН объекта, `false` — нет,
+`null` — все запросы к сервису упали.
 
 ---
 
@@ -215,13 +315,15 @@ GET /api/gai/{plate}
 ## Сверка с налогом (для дашборда)
 
 ```
-GET /api/tax-check?owner_inn=<ИНН владельца>&object_id=<объект>
+GET /api/tax-check?owner_inn=<ИНН владельца>&object_id=<объект>[&plate=<номер>]
 ```
 Два POST-запроса на `integration.facturas_url` (`get-facturas-by-inn`): покупатель —
 ИНН заказчика и ИНН генподрядчика объекта (из cameras.yaml), продавец — владелец ТС,
 период — `integration.facturas_months` (деф. 3) месяцев назад от сегодня.
-Ответ: `{owner_inn, object_name, start_date, end_date, checks: [{role, buyer_inn,
-facturas: [...] | error}]}`. Используется кнопкой «Сверка с налогом» в модалке ГАИ.
+Ответ: `{owner_inn, object_name, has_contract, start_date, end_date, checks:
+[{role, buyer_inn, facturas: [...] | error}]}`. Если задан `plate`, результат
+записывается в `has_contract` всех событий этого номера на этом объекте.
+Используется кнопкой «Сверка с налогом» в модалке ГАИ.
 
 ---
 

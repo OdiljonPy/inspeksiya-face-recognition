@@ -99,4 +99,10 @@ integration:
   # Автопроверка НОВОГО транспорта по базе ГАИ (фоновый поток в main.py).
   # Статус пишется в vehicle_events.gai_status: found | not_found (HTTP 404/500
   # или pResult!=1 = машины нет в базе) | error (сервис недоступен).
+  # Тот же поток пишет тип владельца (vehicle_events.owner_type: shaxsiy | yuridik |
+  # kompaniya, если ИНН владельца == construction_inn объекта) и owner_inn.
   gai_check_on_new: true
+  # Автосверка с налогом для НОВОГО транспорта (после успешной проверки ГАИ):
+  # фактуры владелец ТС -> заказчик/генподрядчик объекта за facturas_months.
+  # Результат в vehicle_events.has_contract: 1 | 0 | NULL (не проверялся/неприменимо).
+  contract_check_on_new: true

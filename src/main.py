@@ -201,16 +201,26 @@ def main():
         if cfg["anpr"].get("region_ocr", False):
             from anpr.region_ocr import RegionOCR
             region_ocr = RegionOCR()
-        # фоновая проверка нового транспорта по базе ГАИ (статус в gai_status)
+        # фоновая проверка нового транспорта по базе ГАИ (статус в gai_status,
+        # тип владельца в owner_type/owner_inn) + сверка с налогом (has_contract)
         icfg = cfg.get("integration", {}) or {}
         if icfg.get("gai_check_on_new", True) and icfg.get("gai_url"):
             from anpr.gai_check import GaiChecker
+            obj_inns = {o["id"]: {"construction_inn": o.get("construction_inn"),
+                                  "zakazchik_inn": o.get("zakazchik_inn")}
+                        for o in load_objects()}
+            facturas_url = icfg.get("facturas_url", "") \
+                if icfg.get("contract_check_on_new", True) else ""
             gai_checker = GaiChecker(icfg["gai_url"], float(icfg.get("gai_timeout", 12)),
-                                     vehicle_log)
+                                     vehicle_log,
+                                     cache_ttl=float(icfg.get("gai_cache_seconds", 3600)),
+                                     objects=obj_inns, facturas_url=facturas_url,
+                                     facturas_months=int(icfg.get("facturas_months", 3)))
             gai_checker.start()
         print(f"  ANPR GPU={anpr_engine.on_gpu}"
               f" region_ocr={'on' if region_ocr and region_ocr.ok else 'off'}"
-              f" gai_check={'on' if gai_checker else 'off'}")
+              f" gai_check={'on' if gai_checker else 'off'}"
+              f" contract_check={'on' if gai_checker and gai_checker.facturas_url else 'off'}")
 
     q = queue.Queue(maxsize=args.queue_size)
     stop_event = threading.Event()

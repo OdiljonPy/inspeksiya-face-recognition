@@ -75,6 +75,23 @@
       <option value="error">Ошибка проверки</option>
     </select>
   </label>
+  <label class="muted hidden" id="ownerFilterWrap">Владелец:&nbsp;
+    <select id="ownerFilter" onchange="pagerReset('vehicles');loadVehicles()">
+      <option value="" selected>Все</option>
+      <option value="yuridik">Юрлицо</option>
+      <option value="shaxsiy">Физлицо</option>
+      <option value="kompaniya">Генподрядчик</option>
+      <option value="unknown">Неизвестно</option>
+    </select>
+  </label>
+  <label class="muted hidden" id="contractFilterWrap">Договор:&nbsp;
+    <select id="contractFilter" onchange="pagerReset('vehicles');loadVehicles()">
+      <option value="" selected>Все</option>
+      <option value="1">Есть фактуры</option>
+      <option value="0">Нет фактур</option>
+      <option value="unchecked">Не проверен</option>
+    </select>
+  </label>
   <label class="muted">Объект:&nbsp;
     <select id="objectFilter" onchange="onObjectChange()"><option value="">Все объекты</option></select>
   </label>
@@ -106,7 +123,7 @@
     <table>
       <thead><tr>
         <th>Номер</th><th>Распознано</th><th>Фото</th><th>Время</th><th>Камера</th><th>Зона</th>
-        <th>Confidence</th><th>Статус</th><th>ГАИ</th><th></th>
+        <th>Confidence</th><th>Владелец</th><th>Договор</th><th>Статус</th><th>ГАИ</th><th></th>
       </tr></thead>
       <tbody id="vehiclesBody"></tbody>
     </table>
@@ -199,6 +216,8 @@ function switchTab(t) {
   document.getElementById("plateSearch").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("statusFilterWrap").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("gaiFilterWrap").classList.toggle("hidden", t !== "vehicles");
+  document.getElementById("ownerFilterWrap").classList.toggle("hidden", t !== "vehicles");
+  document.getElementById("contractFilterWrap").classList.toggle("hidden", t !== "vehicles");
   if (t === "live") loadLiveCameras();
   else stopLive();           // уходя со вкладки — закрыть MJPEG (освободить камеру/GPU)
   refresh();
@@ -447,13 +466,29 @@ async function loadGallery() {
     "ID в галерее: " + items.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
 }
 
+function ownerBadge(t) {
+  if (t === "yuridik")   return '<span class="badge">юрлицо</span>';
+  if (t === "shaxsiy")   return '<span class="badge">физлицо</span>';
+  if (t === "kompaniya") return '<span class="badge seen" title="ИНН владельца совпадает с генподрядчиком объекта">генподрядчик</span>';
+  return '<span class="muted">—</span>';
+}
+
+function contractBadge(hc, ownerType) {
+  if (hc === true)  return '<span class="badge seen">есть</span>';
+  if (hc === false) return '<span class="badge new">нет</span>';
+  if (ownerType === "kompaniya") return '<span class="muted" title="машина генподрядчика — договор не нужен">н/п</span>';
+  return '<span class="muted" title="не проверялся">—</span>';
+}
+
 async function loadVehicles() {
   const cam = document.getElementById("cameraFilter").value;
   const q = document.getElementById("plateSearch").value.trim();
   const status = document.getElementById("statusFilter").value;
   const gai = document.getElementById("gaiFilter").value;
+  const owner = document.getElementById("ownerFilter").value;
+  const contract = document.getElementById("contractFilter").value;
   const p = pager.vehicles;
-  const d = await (await fetch(`/api/vehicle_events?limit=${p.size}&offset=${p.page * p.size}&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}`)).json();
+  const d = await (await fetch(`/api/vehicle_events?limit=${p.size}&offset=${p.page * p.size}&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}&owner_type=${encodeURIComponent(owner)}&contract=${encodeURIComponent(contract)}`)).json();
   const rows = d.items;
   const body = document.getElementById("vehiclesBody");
   document.getElementById("vehiclesEmpty").classList.toggle("hidden", d.total > 0);
@@ -476,6 +511,8 @@ async function loadVehicles() {
       <td>${r.camera_id}</td>
       <td>${r.zone||""}</td>
       <td>${r.confidence ?? ""}</td>
+      <td>${ownerBadge(r.owner_type)}</td>
+      <td>${contractBadge(r.has_contract, r.owner_type)}</td>
       <td>${status}</td>
       <td><button class="tab" style="padding:4px 10px" onclick="showGai('${r.plate}','${r.object_id||""}')">ГАИ</button></td>
       <td><button class="del" onclick="delVehicle('${r.plate}')">✕</button></td>
@@ -595,7 +632,7 @@ async function taxCheck() {
   const dt = document.getElementById("gaiDateTo").value;
   let d;
   try {
-    const r = await fetch(`/api/tax-check?owner_inn=${encodeURIComponent(_gaiCtx.ownerInn)}&object_id=${encodeURIComponent(_gaiCtx.objectId)}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`);
+    const r = await fetch(`/api/tax-check?owner_inn=${encodeURIComponent(_gaiCtx.ownerInn)}&object_id=${encodeURIComponent(_gaiCtx.objectId)}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}&plate=${encodeURIComponent(_gaiCtx.plate)}`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       box.innerHTML = `<span style="color:var(--new)">Ошибка: ${esc(err.detail || r.status)}</span>`;
@@ -638,6 +675,7 @@ async function taxCheck() {
     }
   }
   box.innerHTML = html;
+  loadVehicles();     // сверка записала has_contract в события — обновить колонку «Договор»
 }
 
 async function delPerson(label) {

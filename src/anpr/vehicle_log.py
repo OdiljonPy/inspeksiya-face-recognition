@@ -46,14 +46,21 @@ class VehicleLog:
                 region_uncertain INTEGER NOT NULL DEFAULT 0, -- интерим: регион ненадёжен
                 object_id        TEXT DEFAULT 'default',     -- объект/стройплощадка (Задача 2)
                 full_path        TEXT,                       -- полный кадр события (общий вид)
-                gai_status       TEXT                        -- проверка по базе ГАИ:
+                gai_status       TEXT,                       -- проверка по базе ГАИ:
                                                              -- found | not_found | error | NULL (не проверялся)
+                owner_type       TEXT,                       -- shaxsiy | yuridik | kompaniya | NULL (неизвестно)
+                owner_inn        TEXT,                       -- ИНН владельца ТС (из ГАИ, только юрлица)
+                has_contract     INTEGER                     -- сверка с налогом: 1=фактуры есть,
+                                                             -- 0=нет, NULL=не проверялся/неприменимо
             )
         """)
         # миграция старых БД (идемпотентно)
         for stmt in ("ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'",
                      "ALTER TABLE vehicle_events ADD COLUMN full_path TEXT",
-                     "ALTER TABLE vehicle_events ADD COLUMN gai_status TEXT"):
+                     "ALTER TABLE vehicle_events ADD COLUMN gai_status TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN owner_type TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN owner_inn TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN has_contract INTEGER"):
             try:
                 self.conn.execute(stmt)
             except sqlite3.OperationalError:
@@ -62,13 +69,16 @@ class VehicleLog:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_cam ON vehicle_events(camera_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_plate ON vehicle_events(plate_normalized)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_obj ON vehicle_events(object_id)")
-        # под фильтры дашборда (статус/ГАИ) на больших базах
+        # под фильтры дашборда (статус/ГАИ/владелец/договор) на больших базах
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_valid ON vehicle_events(valid)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_gai ON vehicle_events(gai_status)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_owner ON vehicle_events(owner_type)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_veh_contract ON vehicle_events(has_contract)")
         self.conn.commit()
 
     def log(self, camera_id, zone, plate_text, plate_normalized, confidence,
-            snapshot_path, dedup_key, valid, region_uncertain, ts=None, object_id="default"):
+            snapshot_path, dedup_key, valid, region_uncertain, ts=None, object_id="default",
+            owner_type=""):
         """
         Записать событие с анти-дребезгом по (camera_id, dedup_key).
         Возвращает rowid НОВОЙ записи или None.
@@ -85,21 +95,27 @@ class VehicleLog:
             if prev is not None and ts - prev[0] < self.dedup_seconds:
                 first_ts, rowid, best_conf = prev
                 if float(confidence) > best_conf:
+                    # owner_type перезаписываем только пока запись НЕ обогащена данными
+                    # ГАИ (owner_inn пуст) — фоновая проверка авторитетнее формата номера
                     self.conn.execute(
                         "UPDATE vehicle_events SET plate_text=?, plate_normalized=?, "
-                        "confidence=?, valid=?, region_uncertain=? WHERE id=?",
+                        "confidence=?, valid=?, region_uncertain=?, "
+                        "owner_type=CASE WHEN owner_inn IS NULL OR owner_inn='' "
+                        "THEN ? ELSE owner_type END WHERE id=?",
                         (plate_text, plate_normalized, float(confidence),
-                         1 if valid else 0, 1 if region_uncertain else 0, rowid),
+                         1 if valid else 0, 1 if region_uncertain else 0,
+                         owner_type or None, rowid),
                     )
                     self.conn.commit()
                     self._last_seen[key] = (first_ts, rowid, float(confidence))
                 return None
             cur = self.conn.execute(
                 "INSERT INTO vehicle_events (timestamp, camera_id, zone, plate_text, "
-                "plate_normalized, confidence, snapshot_path, valid, region_uncertain, object_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "plate_normalized, confidence, snapshot_path, valid, region_uncertain, "
+                "object_id, owner_type) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, camera_id, zone, plate_text, plate_normalized, float(confidence),
-                 snapshot_path, 1 if valid else 0, 1 if region_uncertain else 0, object_id),
+                 snapshot_path, 1 if valid else 0, 1 if region_uncertain else 0, object_id,
+                 owner_type or None),
             )
             self.conn.commit()
             self._last_seen[key] = (ts, cur.lastrowid, float(confidence))
@@ -126,6 +142,20 @@ class VehicleLog:
         with self.lock:
             self.conn.execute("UPDATE vehicle_events SET gai_status=? WHERE id=?",
                               (status, rowid))
+            self.conn.commit()
+
+    def set_owner(self, rowid: int, owner_type: str, owner_inn: str = ""):
+        """Дописать тип владельца (уточнён данными ГАИ) и его ИНН."""
+        with self.lock:
+            self.conn.execute("UPDATE vehicle_events SET owner_type=?, owner_inn=? WHERE id=?",
+                              (owner_type or None, owner_inn or None, rowid))
+            self.conn.commit()
+
+    def set_contract(self, rowid: int, has_contract):
+        """Результат сверки с налогом: 1=фактуры есть, 0=нет, None=не проверялся."""
+        with self.lock:
+            self.conn.execute("UPDATE vehicle_events SET has_contract=? WHERE id=?",
+                              (has_contract, rowid))
             self.conn.commit()
 
     def set_full(self, rowid: int, full_path: str):

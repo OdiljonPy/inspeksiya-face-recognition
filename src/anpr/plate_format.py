@@ -81,6 +81,32 @@ _BODY_ALTS = r"[A-Z][0-9]{3}[A-Z]{2}|[0-9]{3}[A-Z]{3}"
 _BODY_RE = re.compile(rf"^({_BODY_ALTS})$")
 _BODY_SUFFIX_RE = re.compile(rf"({_BODY_ALTS})$")
 
+# Тип владельца ТС (vehicle_events.owner_type):
+#   shaxsiy   — физлицо (тело "A123BC")
+#   yuridik   — юрлицо (тело "123ABC")
+#   kompaniya — принадлежит генподрядчику объекта (ИНН из ГАИ == construction_inn)
+OWNER_SHAXSIY = "shaxsiy"
+OWNER_YURIDIK = "yuridik"
+OWNER_KOMPANIYA = "kompaniya"
+
+_BODY_SHAXSIY_RE = re.compile(r"^[A-Z][0-9]{3}[A-Z]{2}$")
+_BODY_YURIDIK_RE = re.compile(r"^[0-9]{3}[A-Z]{3}$")
+
+
+def owner_type_from_body(body: str) -> str:
+    """
+    Базовый тип владельца по ФОРМАТУ тела номера (сам формат РУз кодирует тип):
+    "A123BC" -> shaxsiy (физлицо), "123ABC" -> yuridik (юрлицо), иначе "" (неизвестно).
+    Уточняется данными ГАИ (pOwnerType) и сравнением ИНН с генподрядчиком объекта.
+    """
+    if not body:
+        return ""
+    if _BODY_SHAXSIY_RE.fullmatch(body):
+        return OWNER_SHAXSIY
+    if _BODY_YURIDIK_RE.fullmatch(body):
+        return OWNER_YURIDIK
+    return ""
+
 
 class PlateValidator:
     """Проверяет/разбирает нормализованный номер по regex узбекского формата из конфига."""

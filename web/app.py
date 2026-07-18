@@ -131,7 +131,10 @@ def _ensure_schema():
                      "ALTER TABLE events ADD COLUMN uncertain INTEGER NOT NULL DEFAULT 0",
                      "ALTER TABLE vehicle_events ADD COLUMN full_path TEXT",
                      "ALTER TABLE vehicle_events ADD COLUMN object_id TEXT DEFAULT 'default'",
-                     "ALTER TABLE vehicle_events ADD COLUMN gai_status TEXT"):
+                     "ALTER TABLE vehicle_events ADD COLUMN gai_status TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN owner_type TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN owner_inn TEXT",
+                     "ALTER TABLE vehicle_events ADD COLUMN has_contract INTEGER"):
             try:
                 c.execute(stmt)
                 c.commit()
@@ -231,19 +234,37 @@ def api_events(camera: str = Query("", description="фильтр по camera_id"
     return {"total": total, "items": out}
 
 
+# Тип владельца ТС (vehicle_events.owner_type): физлицо | юрлицо | генподрядчик
+_OWNER_TYPES = ("shaxsiy", "yuridik", "kompaniya")
+
+
+def _owner_contract_where(owner_type: str, contract: str, where: list, params: list):
+    """Общие фильтры owner_type/has_contract для API транспорта (дашборд и v1)."""
+    if owner_type in _OWNER_TYPES:
+        where.append("owner_type = ?"); params.append(owner_type)
+    elif owner_type == "unknown":
+        where.append("(owner_type IS NULL OR owner_type = '')")
+    if contract in ("0", "1"):
+        where.append("has_contract = ?"); params.append(int(contract))
+    elif contract == "unchecked":
+        where.append("has_contract IS NULL")
+
+
 @app.get("/api/vehicle_events")
 def api_vehicle_events(camera: str = Query("", description="фильтр по camera_id"),
                        object: str = Query("", description="фильтр по объекту"),
                        q: str = Query("", description="поиск по номеру (подстрока)"),
                        valid: str = Query("", description="'1' — валидные, '0' — невалидные, '' — все"),
                        gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
+                       owner_type: str = Query("", description="shaxsiy|yuridik|kompaniya|unknown|'' (все)"),
+                       contract: str = Query("", description="'1' — есть фактуры, '0' — нет, unchecked|'' (все)"),
                        limit: int = Query(100, ge=1, le=1000),
                        offset: int = Query(0, ge=0)):
     if not os.path.exists(DB_PATH):
         return {"total": 0, "items": []}
     sql = ("SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
            "confidence, snapshot_path, valid, region_uncertain, full_path, object_id, "
-           "gai_status FROM vehicle_events")
+           "gai_status, owner_type, owner_inn, has_contract FROM vehicle_events")
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
@@ -257,6 +278,7 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
         where.append("gai_status = ?"); params.append(gai)
     elif gai == "unchecked":
         where.append("(gai_status IS NULL OR gai_status = '')")
+    _owner_contract_where(owner_type, contract, where, params)
     cond = (" WHERE " + " AND ".join(where)) if where else ""
     sql += cond + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
 
@@ -276,6 +298,10 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
                     "object_id": r["object_id"] or "default",
                     "gai_status": r["gai_status"] or "",
+                    "owner_type": r["owner_type"] or "",
+                    "owner_inn": r["owner_inn"] or "",
+                    # None = не проверялся/неприменимо (иначе true/false)
+                    "has_contract": None if r["has_contract"] is None else bool(r["has_contract"]),
                 })
     except sqlite3.OperationalError:
         return {"total": 0, "items": []}   # таблицы ещё нет
@@ -672,6 +698,8 @@ def api_v1_vehicles(request: Request,
                     plate: str = Query("", description="поиск по номеру (подстрока)"),
                     valid: str = Query("", description="'1' — только валидные РУз, '0' — только невалидные"),
                     gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
+                    owner_type: str = Query("", description="shaxsiy|yuridik|kompaniya|unknown|'' (все)"),
+                    has_contract: str = Query("", description="'1' — фактуры есть, '0' — нет, unchecked|'' (все)"),
                     date_from: str = Query(""), date_to: str = Query(""),
                     limit: int = Query(100, ge=1, le=1000),
                     offset: int = Query(0, ge=0)):
@@ -692,6 +720,7 @@ def api_v1_vehicles(request: Request,
         where.append("gai_status = ?"); params.append(gai)
     elif gai == "unchecked":
         where.append("(gai_status IS NULL OR gai_status = '')")
+    _owner_contract_where(owner_type, has_contract, where, params)
     frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
     if frm is not None:
         where.append("timestamp >= ?"); params.append(frm)
@@ -707,7 +736,7 @@ def api_v1_vehicles(request: Request,
             rows = conn.execute(
                 "SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
                 f"confidence, snapshot_path, full_path, valid, region_uncertain, object_id, "
-                f"gai_status FROM vehicle_events{cond} "
+                f"gai_status, owner_type, owner_inn, has_contract FROM vehicle_events{cond} "
                 "ORDER BY timestamp DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
     except sqlite3.OperationalError:
         return {"total": 0, "limit": limit, "offset": offset, "items": []}   # таблицы ещё нет
@@ -725,11 +754,73 @@ def api_v1_vehicles(request: Request,
             "region": pp.region, "body": pp.body,
             "valid": bool(r["valid"]), "region_uncertain": bool(r["region_uncertain"]),
             "gai_status": r["gai_status"] or "",
+            "owner_type": r["owner_type"] or "",
+            "owner_inn": r["owner_inn"] or "",
+            "has_contract": None if r["has_contract"] is None else bool(r["has_contract"]),
             "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
             "plate_url": _abs(request, _plate_url(r["snapshot_path"])),
             "full_url": _abs(request, _full_url(r["full_path"])),
         })
     return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/api/v1/vehicles/stats")
+def api_v1_vehicles_stats(object_id: str = Query("", description="фильтр по объекту"),
+                          object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
+                          camera_id: str = Query("", description="фильтр по камере"),
+                          valid: str = Query("", description="'1' — только валидные РУз, '0' — только невалидные"),
+                          date_from: str = Query(""), date_to: str = Query("")):
+    """
+    API 2а: счётчики транспорта по типу владельца — сколько УНИКАЛЬНЫХ машин
+    (по номеру): юрлица (yuridik), физлица (shaxsiy), машины генподрядчика
+    (kompaniya), неизвестно (unknown). Плюс разрез по сверке с налогом
+    (contract: with/without/unchecked; kompaniya не сверяется — попадает в unchecked).
+    Тип/договор машины берутся из её ПОСЛЕДНЕГО события под фильтром.
+    """
+    object_id = _resolve_object_index(object_index, object_id)
+    empty = {"vehicles_total": 0, "events_total": 0,
+             "by_owner_type": {"yuridik": 0, "shaxsiy": 0, "kompaniya": 0, "unknown": 0},
+             "by_contract": {"with": 0, "without": 0, "unchecked": 0}}
+    if not os.path.exists(DB_PATH):
+        return empty
+    where, params = [], []
+    if object_id:
+        where.append("object_id = ?"); params.append(object_id)
+    if camera_id:
+        where.append("camera_id = ?"); params.append(camera_id)
+    if valid in ("0", "1"):
+        where.append("valid = ?"); params.append(int(valid))
+    frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
+    if frm is not None:
+        where.append("timestamp >= ?"); params.append(frm)
+    if to is not None:
+        where.append("timestamp <= ?"); params.append(to)
+    where.append("plate_normalized != ''")
+    cond = " WHERE " + " AND ".join(where)
+    by_owner = {"yuridik": 0, "shaxsiy": 0, "kompaniya": 0, "unknown": 0}
+    by_contract = {"with": 0, "without": 0, "unchecked": 0}
+    try:
+        with _db() as conn:
+            events_total = conn.execute(
+                f"SELECT COUNT(*) FROM vehicle_events{cond}", params).fetchone()[0]
+            # одна строка на УНИКАЛЬНЫЙ номер — из последнего (max id) события под фильтром
+            rows = conn.execute(
+                "SELECT v.owner_type, v.has_contract FROM vehicle_events v JOIN "
+                f"(SELECT MAX(id) mid FROM vehicle_events{cond} GROUP BY plate_normalized) t "
+                "ON v.id = t.mid", params).fetchall()
+    except sqlite3.OperationalError:
+        return empty                                   # таблицы ещё нет
+    for r in rows:
+        ot = r["owner_type"] if r["owner_type"] in _OWNER_TYPES else "unknown"
+        by_owner[ot] += 1
+        if r["has_contract"] is None:
+            by_contract["unchecked"] += 1
+        else:
+            by_contract["with" if r["has_contract"] else "without"] += 1
+    return {"vehicles_total": len(rows), "events_total": events_total,
+            "object_id": object_id or None,
+            "object_index": _object_indexes().get(object_id) if object_id else None,
+            "by_owner_type": by_owner, "by_contract": by_contract}
 
 
 _PLATE_VALIDATOR = None
@@ -742,6 +833,67 @@ def _plate_validator():
         from anpr.plate_format import PlateValidator
         _PLATE_VALIDATOR = PlateValidator(cfg["anpr"]["plate_regex"])
     return _PLATE_VALIDATOR
+
+
+# ---------- владелец ТС и сверка с налогом (интеграция v1) ----------
+
+@app.get("/api/v1/vehicles/owner/{plate}")
+def api_v1_vehicle_owner(plate: str,
+                         object_id: str = Query("", description="объект — для типа kompaniya (ИНН генподрядчика)"),
+                         object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)")):
+    """
+    v1: владелец ТС по номеру (запрос в ГАИ, с кэшем). Возвращает наш owner_type
+    (shaxsiy | yuridik | kompaniya — если задан объект и ИНН совпал с генподрядчиком;
+    при недоступном ГАИ — базовый тип по формату номера) + сырой ответ ГАИ в "gai".
+    Побочно обновляет gai_status/owner_type/owner_inn у событий этого номера.
+    """
+    object_id = _resolve_object_index(object_index, object_id)
+    norm = re.sub(r"[^A-Z0-9]", "", plate.upper())
+    constr = ""
+    if object_id:
+        obj = next((o for o in load_objects() if o["id"] == object_id), None)
+        if obj is None:
+            raise HTTPException(status_code=404, detail=f"объект {object_id!r} не найден в cameras.yaml")
+        constr = str(obj.get("construction_inn") or "")
+    error = ""
+    try:
+        data = api_gai(norm)                 # прокси ГАИ + кэш + обновление событий в БД
+    except HTTPException as e:               # сервис недоступен/не настроен — деградируем
+        data, error = {}, str(e.detail)      # до базового типа по формату номера
+    found = data.get("pResult") == 1
+    if found:
+        from anpr.gai_check import owner_from_gai
+        owner_type, owner_inn = owner_from_gai(data, constr)
+        source = "gai"
+    else:                                    # нет в базе/сервис упал — базовый тип по формату
+        from anpr.plate_format import owner_type_from_body
+        owner_type, owner_inn = owner_type_from_body(_plate_validator().parse(norm).body), ""
+        source = "plate_format"
+    out = {"plate": norm, "found": found,
+           "owner_type": owner_type, "owner_type_source": source,
+           "owner_inn": owner_inn, "owner_name": data.get("pOwner") or "",
+           "object_id": object_id or None, "gai": data}
+    if error:
+        out["error"] = error
+    return out
+
+
+@app.get("/api/v1/tax-check")
+def api_v1_tax_check(owner_inn: str = Query(..., description="ИНН владельца ТС (из ГАИ)"),
+                     object_id: str = Query("", description="объект (стройплощадка)"),
+                     object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
+                     date_from: str = Query("", description="начало периода (YYYY-MM-DD | DD.MM.YYYY)"),
+                     date_to: str = Query("", description="конец периода"),
+                     plate: str = Query("", description="номер ТС — записать результат в has_contract событий")):
+    """
+    v1: сверка с налогом (фактуры владелец ТС -> заказчик/генподрядчик объекта).
+    Тот же контракт, что /api/tax-check, но объект можно задавать object_index-ом.
+    """
+    object_id = _resolve_object_index(object_index, object_id)
+    if not object_id:
+        raise HTTPException(status_code=422, detail="нужен object_id или object_index")
+    return api_tax_check(owner_inn=owner_inn, object_id=object_id,
+                         date_from=date_from, date_to=date_to, plate=plate)
 
 
 # ---------- DELETE (интеграция v1): транспорт и галерея ----------
@@ -863,7 +1015,10 @@ def api_gai(plate: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"сервис ГАИ недоступен: {e}")
     # ручная проверка тоже обновляет статус событий этого номера
-    _set_gai_status_by_plate(plate, "found" if data.get("pResult") == 1 else "not_found")
+    found = data.get("pResult") == 1
+    _set_gai_status_by_plate(plate, "found" if found else "not_found")
+    if found:
+        _set_owner_by_plate(plate, data)
     with _GAI_LOCK:
         _GAI_CACHE[plate] = (now, data)
     return data
@@ -877,6 +1032,37 @@ def _set_gai_status_by_plate(plate: str, status: str):
         with _db() as conn:
             conn.execute("UPDATE vehicle_events SET gai_status=? WHERE plate_normalized=?",
                          (status, plate))
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _set_owner_by_plate(plate: str, data: dict):
+    """
+    Обновить owner_type/owner_inn у всех событий номера по ответу ГАИ.
+    kompaniya зависит от объекта события (ИНН генподрядчика) — считаем по каждому.
+    """
+    if not os.path.exists(DB_PATH):
+        return
+    from anpr.gai_check import owner_from_gai
+    constr = {o["id"]: str(o.get("construction_inn") or "") for o in load_objects()}
+    try:
+        with _db() as conn:
+            objs = [r["object_id"] for r in conn.execute(
+                "SELECT DISTINCT object_id FROM vehicle_events WHERE plate_normalized=?",
+                (plate,))]
+            for oid in objs:
+                ot, inn = owner_from_gai(data, constr.get(oid or "default", ""))
+                if not (ot or inn):
+                    continue
+                if oid is None:
+                    conn.execute("UPDATE vehicle_events SET owner_type=?, owner_inn=? "
+                                 "WHERE plate_normalized=? AND object_id IS NULL",
+                                 (ot or None, inn or None, plate))
+                else:
+                    conn.execute("UPDATE vehicle_events SET owner_type=?, owner_inn=? "
+                                 "WHERE plate_normalized=? AND object_id=?",
+                                 (ot or None, inn or None, plate, oid))
             conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -898,7 +1084,8 @@ def _tax_date(s: str) -> str:
 def api_tax_check(owner_inn: str = Query(..., description="ИНН владельца ТС (из ГАИ)"),
                   object_id: str = Query(..., description="объект (стройплощадка)"),
                   date_from: str = Query("", description="начало периода (YYYY-MM-DD | DD.MM.YYYY)"),
-                  date_to: str = Query("", description="конец периода")):
+                  date_to: str = Query("", description="конец периода"),
+                  plate: str = Query("", description="номер ТС — записать результат в has_contract событий")):
     """
     Сверка с налогом: были ли счета-фактуры между владельцем ТС (продавец) и
     ИНН-ами объекта (покупатели: заказчик и генподрядчик). Период — из параметров,
@@ -950,8 +1137,24 @@ def api_tax_check(owner_inn: str = Query(..., description="ИНН владель
         except HTTPException as e:
             checks.append({"role": role, "buyer_inn": str(buyer),
                            "buyer_name": "", "error": e.detail})
+    # ручная сверка тоже пишет has_contract в события этого номера на этом объекте
+    has_contract = None
+    answered = [c for c in checks if "facturas" in c]
+    if answered:
+        has_contract = 1 if any(c["facturas"] for c in answered) else 0
+    plate = re.sub(r"[^A-Z0-9]", "", plate.upper())
+    if plate and has_contract is not None and os.path.exists(DB_PATH):
+        try:
+            with _db() as conn:
+                conn.execute("UPDATE vehicle_events SET has_contract=? "
+                             "WHERE plate_normalized=? AND object_id=?",
+                             (has_contract, plate, object_id))
+                conn.commit()
+        except sqlite3.OperationalError:
+            pass
     return {"owner_inn": owner_inn, "owner_name": owner_name, "object_id": object_id,
             "object_name": obj.get("name", object_id),
+            "has_contract": None if has_contract is None else bool(has_contract),
             "start_date": start_s, "end_date": end_s, "checks": checks}
 
 
