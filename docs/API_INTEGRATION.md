@@ -294,8 +294,12 @@ Content-Type: application/json
 ### Список работников + статистика появлений
 
 ```
-GET /api/v1/known-faces[?object_index=41109]
+GET /api/v1/known-faces[?object_index=41109][&date_from=...&date_to=...]
 ```
+
+`date_from`/`date_to` (общий формат дат, см. выше) ограничивают ПЕРИОД подсчёта
+появлений: `events` и `last_seen` считаются только по событиям внутри периода.
+Сам список людей не фильтруется — не замеченные в период вернутся с `events: 0`.
 ```json
 {
   "total": 2,

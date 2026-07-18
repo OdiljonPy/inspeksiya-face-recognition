@@ -935,19 +935,30 @@ def api_v1_known_face_add(request: Request, body: KnownFaceIn):
 
 @app.get("/api/v1/known-faces")
 def api_v1_known_faces(request: Request,
-                       object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)")):
+                       object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
+                       date_from: str = Query("", description="unix ts | YYYY-MM-DD | YYYY-MM-DDTHH:MM:SS"),
+                       date_to: str = Query("", description="то же; YYYY-MM-DD — включительно")):
     """
     v1: список известных людей + статистика появлений на камерах
     (events — сколько раз замечен, last_seen — когда последний раз).
+    date_from/date_to ограничивают ПЕРИОД подсчёта появлений (сам список людей
+    не фильтруется — не замеченные в период вернутся с events=0).
     """
     items = []
     if not os.path.exists(META_PATH):
         return {"total": 0, "items": []}
     counts, last = {}, {}
     if os.path.exists(DB_PATH):
+        sql = ("SELECT person, COUNT(*) c, MAX(ts) m FROM events "
+               "WHERE person LIKE 'known_%'")
+        params = []
+        frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
+        if frm is not None:
+            sql += " AND ts >= ?"; params.append(frm)
+        if to is not None:
+            sql += " AND ts <= ?"; params.append(to)
         with _db() as conn:
-            for r in conn.execute("SELECT person, COUNT(*) c, MAX(ts) m FROM events "
-                                  "WHERE person LIKE 'known_%' GROUP BY person"):
+            for r in conn.execute(sql + " GROUP BY person", params):
                 counts[r["person"]], last[r["person"]] = r["c"], r["m"]
     obj_by_index = {str(o.get("object_index") or ""): o for o in load_objects()}
     with open(META_PATH, "r", encoding="utf-8") as f:
