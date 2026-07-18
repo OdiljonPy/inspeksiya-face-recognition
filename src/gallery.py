@@ -33,11 +33,15 @@ import faiss
 @dataclass
 class Identity:
     idx: int            # порядковый индекс в списке identities
-    label: str          # человекочитаемый ID, напр. "person_0001"
+    label: str          # человекочитаемый ID, напр. "person_0001" / "known_0001"
     crop_path: str      # путь к сохранённому снимку (относительно проекта)
     first_seen: float
     last_seen: float
     n_emb: int = 0      # сколько эмбеддингов в базе у этого человека
+    # --- модуль «известные люди» (заведены через API, а не авто-галереей) ---
+    name: str = ""          # ФИО (только у known)
+    known: bool = False     # True = заведён через API известных людей
+    object_index: str = ""  # индекс объекта во внешней системе (откуда пришёл работник)
 
 
 class Gallery:
@@ -64,6 +68,7 @@ class Gallery:
         self.owners = np.zeros((0,), dtype=np.int64)
         self.index = faiss.IndexFlatIP(dim)
         self._next_num = 1
+        self._next_known_num = 1        # отдельный счётчик для known_XXXX
         self._loaded_mtime = 0.0        # mtime meta.json на момент нашей последней записи/чтения
 
         os.makedirs(self.faces_dir, exist_ok=True)
@@ -87,6 +92,8 @@ class Gallery:
         self.identities = [Identity(**{k: v for k, v in d.items() if k in fields})
                            for d in meta.get("identities", [])]
         self._next_num = meta.get("next_num", len(self.identities) + 1)
+        self._next_known_num = meta.get(
+            "next_known_num", sum(1 for i in self.identities if i.known) + 1)
         self.embeddings = np.zeros((0, self.dim), dtype=np.float32)
         self.owners = np.zeros((0,), dtype=np.int64)
         self.index = faiss.IndexFlatIP(self.dim)
@@ -124,6 +131,7 @@ class Gallery:
         np.save(own_p, self.owners)
         meta = {
             "next_num": self._next_num,
+            "next_known_num": self._next_known_num,
             "identities": [asdict(i) for i in self.identities],
         }
         tmp = meta_p + ".tmp"
@@ -192,6 +200,51 @@ class Gallery:
         if ident.n_emb < self.max_emb and score < self.add_below:
             self._append_embedding(ident.idx, emb)
             self.save()
+
+    # ------------------- известные люди (модуль known faces) -------------------
+    def add_known(self, normed_emb, image_bgr, bbox, name: str,
+                  object_index: str = "", ts: float | None = None) -> Identity:
+        """
+        Завести ИЗВЕСТНОГО человека (по фото через API, а не с камеры):
+        label known_XXXX + ФИО + снимок из загруженного фото + эмбеддинг.
+        Дальше он узнаётся камерами обычной логикой галереи (identify).
+        Вызывается из веб-процесса: пишем под lock; процесс распознавания
+        подхватит нового человека через maybe_reload (mtime meta.json).
+        """
+        if ts is None:
+            ts = time.time()
+        with self.lock:
+            idx = len(self.identities)
+            label = f"known_{self._next_known_num:04d}"
+            self._next_known_num += 1
+
+            crop = self._crop_face(image_bgr, bbox)
+            crop_path = os.path.join(self.faces_dir, f"{label}.jpg")
+            if crop is not None:
+                cv2.imwrite(crop_path, _enhance_gallery_crop(crop),
+                            [cv2.IMWRITE_JPEG_QUALITY, 97])
+
+            ident = Identity(idx=idx, label=label,
+                             crop_path=os.path.relpath(crop_path, _project_root()),
+                             first_seen=ts, last_seen=ts, n_emb=0,
+                             name=name, known=True, object_index=str(object_index or ""))
+            self.identities.append(ident)
+            self._append_embedding(idx, normed_emb)
+            self.save()
+            return ident
+
+    def add_known_embedding(self, label: str, normed_emb) -> Identity | None:
+        """
+        Дописать известному человеку ещё один ракурс (повторная загрузка фото
+        с label=known_XXXX). Возвращает Identity или None, если label не найден.
+        """
+        with self.lock:
+            ident = self.get_by_label(label)
+            if ident is None or not ident.known:
+                return None
+            self._append_embedding(ident.idx, normed_emb)
+            self.save()
+            return ident
 
     def get_by_label(self, label: str):
         for i in self.identities:

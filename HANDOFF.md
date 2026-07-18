@@ -222,6 +222,24 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   с объектом финансово. Если ИНН владельца ТС СОВПАДАЕТ с construction_inn объекта —
   вверху модалки ГАИ яркий зелёный баннер «МАШИНА ПРИНАДЛЕЖИТ ГЕНПОДРЯДЧИКУ»
   (проверка на фронте: /api/objects отдаёт ИНН-ы объектов из cameras.yaml).
+- **Известные люди / known faces (18.07.2026)**: работники заводятся с внешней
+  платформы по фото. Identity в gallery.py расширен ПОЛЯМИ (name, known,
+  object_index — дефолты пустые, старый meta.json совместим; логика
+  identify/add_new НЕ тронута) + отдельный счётчик known_XXXX (next_known_num
+  в meta.json) + методы add_known/add_known_embedding (под lock, из веб-процесса;
+  main.py подхватывает через maybe_reload). API: POST /api/v1/known-faces
+  (JSON: full_name + image_base64 + object_index; РОВНО одно лицо на фото,
+  det>=0.5; label= вместо full_name -> добавить ракурс; БЕЗ python-multipart —
+  нарочно, чтобы не тащить зависимость), GET /api/v1/known-faces (список +
+  events/last_seen из events, фильтр object_index, object_id резолвится из
+  cameras.yaml; пустой object_index НЕ резолвится в default), DELETE
+  /api/v1/known-faces/{label}. Эмбеддинг фото — ленивый FaceEngine в
+  веб-процессе (_get_enroll_engine, det 640, нужен GPU как для live).
+  Известные исключены из /api/gallery (у них вкладка «Известные» с формой
+  загрузки); person_name добавлен в /api/events, /api/v1/faces, /api/v1/persons
+  и показывается под ID в таблице событий. Незнакомые -> person_XXXX как раньше.
+  ВАЖНО при деплое: обновлять оба сервиса вместе — СТАРЫЙ gallery.py отбросит
+  поля name/known/next_known_num при своём save (защитная загрузка meta).
 - **Тип владельца ТС + сверка с налогом (18.07.2026)**: колонки vehicle_events:
   `owner_type` (shaxsiy | yuridik | kompaniya | NULL), `owner_inn`, `has_contract`
   (1|0|NULL=не проверялся/неприменимо). Базовый owner_type — по ФОРМАТУ тела номера

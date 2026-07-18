@@ -249,6 +249,98 @@ has_contract, start_date, end_date, checks: [{role, buyer_inn, facturas | error}
 
 ---
 
+## API 3 — известные люди (known faces)
+
+Внешняя платформа заводит РАБОТНИКОВ по фото: имя + фото + индекс объекта.
+Человек попадает в галерею с меткой `known_XXXX`, и камеры узнают его обычной
+логикой распознавания — события пишутся с его меткой, счётчик появлений растёт.
+Незнакомые люди, как и раньше, получают авто-ID `person_XXXX`.
+
+### Добавить работника
+
+```
+POST /api/v1/known-faces
+Content-Type: application/json
+```
+```json
+{
+  "full_name": "ALIYEV VALI",
+  "object_index": "41109",
+  "image_base64": "<фото jpeg/png в base64, без data:-префикса>"
+}
+```
+
+Требования к фото: РОВНО одно лицо, желательно анфас и крупно (портрет/бейдж).
+Несколько лиц или лицо не найдено → `422`. Ответ:
+
+```json
+{
+  "label": "known_0001",
+  "full_name": "ALIYEV VALI",
+  "object_index": "41109",
+  "n_emb": 1,
+  "enrolled": 1783657800.0, "enrolled_dt": "2026-07-18 12:00:00",
+  "face_url": "http://<host>/faces/known_0001.jpg?v=..."
+}
+```
+
+**Дополнительный ракурс** (повышает узнаваемость — до
+`gallery.max_embeddings_per_id` фото на человека): тот же POST с `label`
+вместо `full_name`:
+```json
+{ "label": "known_0001", "image_base64": "<ещё одно фото>" }
+```
+
+### Список работников + статистика появлений
+
+```
+GET /api/v1/known-faces[?object_index=41109]
+```
+```json
+{
+  "total": 2,
+  "items": [{
+    "label": "known_0001",
+    "full_name": "ALIYEV VALI",
+    "object_index": "41109",
+    "object_id": "obj_avloniy", "object_name": "Avloniy",
+    "enrolled": 1783657800.0, "enrolled_dt": "2026-07-18 12:00:00",
+    "events": 17,
+    "last_seen": 1783830000.0, "last_seen_dt": "2026-07-20 09:20:00",
+    "n_emb": 2,
+    "face_url": "http://<host>/faces/known_0001.jpg?v=..."
+  }]
+}
+```
+`events` — сколько раз человек замечен камерами, `last_seen` — последнее появление.
+`object_id`/`object_name` заполняются, если `object_index` совпал с объектом из
+cameras.yaml. Детальные события — `GET /api/v1/faces?person=known_0001` (в
+элементах есть `person_name`); агрегация по людям — `/api/v1/persons`
+(тоже с `person_name`).
+
+### Удалить работника
+
+```
+DELETE /api/v1/known-faces/{label}
+```
+Удаляет человека из галереи и ВСЕ его события.
+
+Пример (Python):
+```python
+import base64, requests
+
+img = base64.b64encode(open("worker.jpg", "rb").read()).decode()
+r = requests.post(f"{BASE}/api/v1/known-faces", json={
+    "full_name": "ALIYEV VALI", "object_index": "41109", "image_base64": img,
+}).json()
+print(r["label"])          # known_0001
+
+for w in requests.get(f"{BASE}/api/v1/known-faces").json()["items"]:
+    print(w["full_name"], w["events"], w["last_seen_dt"])
+```
+
+---
+
 ## Примеры интеграции
 
 Python:

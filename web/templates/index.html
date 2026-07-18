@@ -52,6 +52,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="events" onclick="switchTab('events')">События (лица)</div>
     <div class="tab" data-tab="gallery" onclick="switchTab('gallery')">Галерея ID</div>
+    <div class="tab" data-tab="known" onclick="switchTab('known')">Известные</div>
     <div class="tab" data-tab="vehicles" onclick="switchTab('vehicles')">Транспорт</div>
     <div class="tab" data-tab="live" onclick="switchTab('live')">Камеры (live)</div>
     <div class="tab" data-tab="analytics" onclick="switchTab('analytics')">Аналитика</div>
@@ -117,6 +118,24 @@
   <section id="view-gallery" class="hidden">
     <div class="grid" id="galleryGrid"></div>
     <div id="galleryEmpty" class="empty hidden">Галерея пуста — лица появятся автоматически с камер.</div>
+  </section>
+
+  <section id="view-known" class="hidden">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;
+                background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <b>Добавить известного:</b>
+      <input id="knownName" placeholder="ФИО"
+             style="background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-width:220px">
+      <input id="knownObjIndex" placeholder="Индекс объекта (опц.)"
+             style="background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:170px">
+      <input id="knownFile" type="file" accept="image/*" class="muted">
+      <button class="tab" style="border-color:var(--accent);color:var(--accent)"
+              onclick="uploadKnown()">⬆ Загрузить</button>
+      <span id="knownUploadStatus" class="muted"></span>
+    </div>
+    <div class="grid" id="knownGrid"></div>
+    <div id="knownEmpty" class="empty hidden">Известных людей пока нет — добавьте фото
+      с ФИО выше или через API <code>POST /api/v1/known-faces</code>.</div>
   </section>
 
   <section id="view-vehicles" class="hidden">
@@ -209,6 +228,7 @@ function switchTab(t) {
   document.querySelectorAll(".tab[data-tab]").forEach(e => e.classList.toggle("active", e.dataset.tab === t));
   document.getElementById("view-events").classList.toggle("hidden", t !== "events");
   document.getElementById("view-gallery").classList.toggle("hidden", t !== "gallery");
+  document.getElementById("view-known").classList.toggle("hidden", t !== "known");
   document.getElementById("view-vehicles").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("view-live").classList.toggle("hidden", t !== "live");
   document.getElementById("view-analytics").classList.toggle("hidden", t !== "analytics");
@@ -439,7 +459,7 @@ async function loadEvents() {
       <td>${fmtTime(r.ts)}</td>
       <td>${r.camera_id}</td>
       <td>${r.zone||""}</td>
-      <td class="id" style="cursor:pointer;text-decoration:underline" onclick="openPerson('${r.person}')">${r.person}</td>
+      <td class="id" style="cursor:pointer;text-decoration:underline" onclick="openPerson('${r.person}')">${r.person}${r.person_name ? `<div class="muted" style="font-size:11px">${esc(r.person_name)}</div>` : ""}</td>
       <td>${r.score ?? ""}</td>
       <td>${r.is_new ? '<span class="badge new">НОВЫЙ</span>'
                      : '<span class="badge seen">замечен</span>'}</td>
@@ -464,6 +484,64 @@ async function loadGallery() {
     </div>`).join("");
   document.getElementById("status").textContent =
     "ID в галерее: " + items.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+// ---------- Известные люди (known faces) ----------
+async function loadKnown() {
+  const d = await (await fetch("/api/v1/known-faces")).json();
+  const items = d.items || [];
+  const grid = document.getElementById("knownGrid");
+  document.getElementById("knownEmpty").classList.toggle("hidden", items.length > 0);
+  grid.innerHTML = items.map(i => `
+    <div class="card">
+      <img src="${i.face_url}" onerror="this.style.opacity=.2">
+      <div class="label" style="cursor:pointer;text-decoration:underline"
+           onclick="openPerson('${i.label}')">${esc(i.full_name || i.label)}</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        ${i.label} · ракурсов: ${i.n_emb}${i.object_name ? " · " + esc(i.object_name) : (i.object_index ? " · объект " + esc(i.object_index) : "")}<br>
+        замечен: ${i.events} раз${i.last_seen ? " · последний: " + fmtTime(i.last_seen) : ""}
+      </div>
+      <button class="del" onclick="delKnown('${i.label}', '${esc(i.full_name||"")}')">✕ удалить</button>
+    </div>`).join("");
+  document.getElementById("status").textContent =
+    "известных: " + items.length + " · обновлено " + new Date().toLocaleTimeString("ru-RU");
+}
+
+async function uploadKnown() {
+  const name = document.getElementById("knownName").value.trim();
+  const objIndex = document.getElementById("knownObjIndex").value.trim();
+  const file = document.getElementById("knownFile").files[0];
+  const st = document.getElementById("knownUploadStatus");
+  if (!name) { st.textContent = "введите ФИО"; return; }
+  if (!file) { st.textContent = "выберите фото"; return; }
+  st.textContent = "загрузка…";
+  const b64 = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result.split(",")[1]);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
+  });
+  const r = await fetch("/api/v1/known-faces", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({full_name: name, object_index: objIndex, image_base64: b64}),
+  });
+  if (r.ok) {
+    const d = await r.json();
+    st.textContent = "добавлен: " + d.label;
+    document.getElementById("knownName").value = "";
+    document.getElementById("knownFile").value = "";
+    loadKnown();
+  } else {
+    const e = await r.json().catch(() => ({}));
+    st.textContent = "ошибка: " + (e.detail || r.status);
+  }
+}
+
+async function delKnown(label, name) {
+  if (!confirm(`Удалить ${name || label} (${label}) и ВСЕ его события?`)) return;
+  const r = await fetch("/api/v1/known-faces/" + encodeURIComponent(label), {method: "DELETE"});
+  if (r.ok) loadKnown();
+  else alert("Ошибка удаления: " + r.status);
 }
 
 function ownerBadge(t) {
@@ -708,6 +786,7 @@ async function delVehicle(plate) {
 function refresh() {
   if (currentTab === "events") loadEvents();
   else if (currentTab === "gallery") loadGallery();
+  else if (currentTab === "known") loadKnown();
   else if (currentTab === "vehicles") loadVehicles();
   else if (currentTab === "analytics") loadAnalytics();
   // для live периодический refresh НЕ трогает MJPEG (иначе перезапустит поток)
