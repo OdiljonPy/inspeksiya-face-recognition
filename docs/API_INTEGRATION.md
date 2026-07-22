@@ -232,6 +232,9 @@ GET /api/v1/vehicles/owner/01123ABC?object_index=41109
   "owner_inn": "301234567",
   "owner_name": "OOO QURILISH",
   "object_id": "obj_avloniy",
+  "object_index": 41109,
+  "zakazchik_inn": "204775594",
+  "construction_inn": "203658827",
   "gai": { "pResult": 1, "pOwnerType": 1, "pOrganizationInn": 301234567, "...": "полный ответ ГАИ" }
 }
 ```
@@ -239,6 +242,8 @@ GET /api/v1/vehicles/owner/01123ABC?object_index=41109
 (или сервис недоступен — тогда дополнительно поле `error`), тип определён по
 формату номера. Ответы ГАИ кэшируются (`integration.gai_cache_seconds`).
 Побочно обновляет `gai_status` / `owner_type` / `owner_inn` у всех событий номера.
+`object_index` / `zakazchik_inn` / `construction_inn` — реквизиты объекта из
+cameras.yaml (`null`, если объект не задан в запросе).
 
 ---
 

@@ -1038,12 +1038,15 @@ def api_v1_vehicle_owner(plate: str,
     """
     object_id = _resolve_object_index(object_index, object_id)
     norm = re.sub(r"[^A-Z0-9]", "", plate.upper())
-    constr = ""
+    constr = zakaz = ""
+    obj_index = None
     if object_id:
         obj = next((o for o in load_objects() if o["id"] == object_id), None)
         if obj is None:
             raise HTTPException(status_code=404, detail=f"объект {object_id!r} не найден в cameras.yaml")
         constr = str(obj.get("construction_inn") or "")
+        zakaz = str(obj.get("zakazchik_inn") or "")
+        obj_index = obj.get("object_index")
     error = ""
     try:
         data = api_gai(norm)                 # прокси ГАИ + кэш + обновление событий в БД
@@ -1061,7 +1064,9 @@ def api_v1_vehicle_owner(plate: str,
     out = {"plate": norm, "found": found,
            "owner_type": owner_type, "owner_type_source": source,
            "owner_inn": owner_inn, "owner_name": data.get("pOwner") or "",
-           "object_id": object_id or None, "gai": data}
+           "object_id": object_id or None, "object_index": obj_index,
+           "zakazchik_inn": zakaz or None, "construction_inn": constr or None,
+           "gai": data}
     if error:
         out["error"] = error
     return out
