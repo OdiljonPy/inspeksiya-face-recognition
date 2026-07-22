@@ -273,13 +273,12 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                        gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
                        owner_type: str = Query("", description="shaxsiy|yuridik|kompaniya|unknown|'' (все)"),
                        contract: str = Query("", description="'1' — есть фактуры, '0' — нет, unchecked|'' (все)"),
+                       group: str = Query("", description="'plate' — схлопнуть дубли номера "
+                                                          "(последнее событие + счётчик проездов)"),
                        limit: int = Query(100, ge=1, le=1000),
                        offset: int = Query(0, ge=0)):
     if not os.path.exists(DB_PATH):
         return {"total": 0, "items": []}
-    sql = ("SELECT id, timestamp, camera_id, zone, plate_text, plate_normalized, "
-           "confidence, snapshot_path, valid, region_uncertain, full_path, object_id, "
-           "gai_status, owner_type, owner_inn, has_contract FROM vehicle_events")
     where, params = [], []
     if camera:
         where.append("camera_id = ?"); params.append(camera)
@@ -295,14 +294,28 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
         where.append("(gai_status IS NULL OR gai_status = '')")
     _owner_contract_where(owner_type, contract, where, params)
     cond = (" WHERE " + " AND ".join(where)) if where else ""
-    sql += cond + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+
+    cols = ("ve.id, ve.timestamp, ve.camera_id, ve.zone, ve.plate_text, "
+            "ve.plate_normalized, ve.confidence, ve.snapshot_path, ve.valid, "
+            "ve.region_uncertain, ve.full_path, ve.object_id, ve.gai_status, "
+            "ve.owner_type, ve.owner_inn, ve.has_contract")
+    if group == "plate":
+        # один ряд на НОМЕР: последнее событие (MAX(id)) + счётчик проездов под фильтром
+        sub = f"SELECT MAX(id) mid, COUNT(*) cnt FROM vehicle_events{cond} GROUP BY plate_normalized"
+        total_sql = f"SELECT COUNT(*) FROM ({sub})"
+        rows_sql = (f"SELECT {cols}, g.cnt FROM vehicle_events ve "
+                    f"JOIN ({sub}) g ON ve.id = g.mid "
+                    "ORDER BY ve.timestamp DESC LIMIT ? OFFSET ?")
+    else:
+        total_sql = "SELECT COUNT(*) FROM vehicle_events" + cond
+        rows_sql = (f"SELECT {cols}, 1 AS cnt FROM vehicle_events ve{cond} "
+                    "ORDER BY ve.timestamp DESC LIMIT ? OFFSET ?")
 
     out = []
     try:
         with _db() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM vehicle_events" + cond,
-                                 params).fetchone()[0]
-            for r in conn.execute(sql, params + [limit, offset]):
+            total = conn.execute(total_sql, params).fetchone()[0]
+            for r in conn.execute(rows_sql, params + [limit, offset]):
                 out.append({
                     "id": r["id"], "ts": r["timestamp"],
                     "camera_id": r["camera_id"], "zone": r["zone"],
@@ -317,6 +330,7 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "owner_inn": r["owner_inn"] or "",
                     # None = не проверялся/неприменимо (иначе true/false)
                     "has_contract": None if r["has_contract"] is None else bool(r["has_contract"]),
+                    "events_count": r["cnt"],
                 })
     except sqlite3.OperationalError:
         return {"total": 0, "items": []}   # таблицы ещё нет
@@ -578,6 +592,14 @@ def _object_indexes() -> dict:
     return {o["id"]: o.get("object_index") for o in load_objects()}
 
 
+def _object_inns() -> dict:
+    """object_id -> {zakazchik_inn, construction_inn} из cameras.yaml (для v1-ответов)."""
+    return {o["id"]: {
+        "zakazchik_inn": str(o["zakazchik_inn"]) if o.get("zakazchik_inn") else None,
+        "construction_inn": str(o["construction_inn"]) if o.get("construction_inn") else None,
+    } for o in load_objects()}
+
+
 def _resolve_object_index(object_index: str, object_id: str) -> str:
     """
     Фильтр по object_index (индекс во внешней системе) -> наш object_id.
@@ -642,6 +664,7 @@ def api_v1_faces(request: Request,
     cond = (" WHERE " + " AND ".join(where)) if where else ""
     names = _object_names()
     indexes = _object_indexes()
+    inns = _object_inns()
     known = _known_names()
     with _db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM events{cond}", params).fetchone()[0]
@@ -654,6 +677,8 @@ def api_v1_faces(request: Request,
         "object_id": r["object_id"],
         "object_name": names.get(r["object_id"], r["object_id"]),
         "object_index": indexes.get(r["object_id"]),
+        "zakazchik_inn": inns.get(r["object_id"], {}).get("zakazchik_inn"),
+        "construction_inn": inns.get(r["object_id"], {}).get("construction_inn"),
         "camera_id": r["camera_id"], "zone": r["zone"],
         "person": r["person"],
         "person_name": known.get(r["person"], ""),
@@ -705,9 +730,12 @@ def api_v1_persons(request: Request,
         "cameras": (r["cams"] or "").split(","),
         "face_url": _abs(request, faces.get(r["person"], "")),
     } for r in rows]
+    obj_inns = _object_inns().get(object_id, {}) if object_id else {}
     return {"total": total, "limit": limit, "offset": offset,
             "object_id": object_id or None,
             "object_index": _object_indexes().get(object_id) if object_id else None,
+            "zakazchik_inn": obj_inns.get("zakazchik_inn"),
+            "construction_inn": obj_inns.get("construction_inn"),
             "items": items}
 
 
@@ -750,6 +778,7 @@ def api_v1_vehicles(request: Request,
     cond = (" WHERE " + " AND ".join(where)) if where else ""
     names = _object_names()
     indexes = _object_indexes()
+    inns = _object_inns()
     try:
         with _db() as conn:
             total = conn.execute(
@@ -769,6 +798,8 @@ def api_v1_vehicles(request: Request,
             "object_id": r["object_id"],
             "object_name": names.get(r["object_id"], r["object_id"]),
             "object_index": indexes.get(r["object_id"]),
+            "zakazchik_inn": inns.get(r["object_id"], {}).get("zakazchik_inn"),
+            "construction_inn": inns.get(r["object_id"], {}).get("construction_inn"),
             "camera_id": r["camera_id"], "zone": r["zone"],
             "plate": pp.normalized or r["plate_normalized"],
             "plate_raw": r["plate_text"],

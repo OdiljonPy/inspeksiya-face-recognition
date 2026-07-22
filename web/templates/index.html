@@ -93,6 +93,10 @@
       <option value="unchecked">Не проверен</option>
     </select>
   </label>
+  <label class="muted hidden" id="dedupWrap" title="Один ряд на номер: последний проезд + счётчик">
+    <input type="checkbox" id="dedupPlates" checked
+           onchange="pagerReset('vehicles');loadVehicles()"> Без дублей
+  </label>
   <label class="muted">Объект:&nbsp;
     <select id="objectFilter" onchange="onObjectChange()"><option value="">Все объекты</option></select>
   </label>
@@ -238,6 +242,7 @@ function switchTab(t) {
   document.getElementById("gaiFilterWrap").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("ownerFilterWrap").classList.toggle("hidden", t !== "vehicles");
   document.getElementById("contractFilterWrap").classList.toggle("hidden", t !== "vehicles");
+  document.getElementById("dedupWrap").classList.toggle("hidden", t !== "vehicles");
   if (t === "live") loadLiveCameras();
   else stopLive();           // уходя со вкладки — закрыть MJPEG (освободить камеру/GPU)
   refresh();
@@ -565,8 +570,9 @@ async function loadVehicles() {
   const gai = document.getElementById("gaiFilter").value;
   const owner = document.getElementById("ownerFilter").value;
   const contract = document.getElementById("contractFilter").value;
+  const grp = document.getElementById("dedupPlates").checked ? "plate" : "";
   const p = pager.vehicles;
-  const d = await (await fetch(`/api/vehicle_events?limit=${p.size}&offset=${p.page * p.size}&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}&owner_type=${encodeURIComponent(owner)}&contract=${encodeURIComponent(contract)}`)).json();
+  const d = await (await fetch(`/api/vehicle_events?limit=${p.size}&offset=${p.page * p.size}&camera=${encodeURIComponent(cam)}&q=${encodeURIComponent(q)}&object=${encodeURIComponent(currentObject())}&valid=${encodeURIComponent(status)}&gai=${encodeURIComponent(gai)}&owner_type=${encodeURIComponent(owner)}&contract=${encodeURIComponent(contract)}&group=${grp}`)).json();
   const rows = d.items;
   const body = document.getElementById("vehiclesBody");
   document.getElementById("vehiclesEmpty").classList.toggle("hidden", d.total > 0);
@@ -581,6 +587,7 @@ async function loadVehicles() {
       status += ' <span class="badge" style="background:rgba(255,165,0,.15);color:orange" title="сервис ГАИ был недоступен">ГАИ?</span>';
     return `<tr>
       <td class="id" style="font-size:15px;white-space:nowrap">${r.plate}
+        ${r.events_count > 1 ? `<span class="badge seen" title="проездов под фильтром">×${r.events_count}</span>` : ""}
         <button class="tab" style="padding:1px 7px;font-size:12px" title="Исправить номер"
                 onclick="editPlate(${r.id}, '${r.plate}')">✎</button></td>
       <td>${r.plate_url ? `<img class="thumb" style="width:90px;height:34px" src="${r.plate_url}">` : "—"}</td>
