@@ -57,6 +57,8 @@ GET /api/v1/faces?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-12&
   "object_id": "obj_avloniy",
   "object_name": "Avloniy",
   "object_index": 41109,
+  "zakazchik_inn": "204775594",
+  "construction_inn": "203658827",
   "camera_id": "cam03",
   "zone": "Avloniy - 1",
   "person": "person_0001",
@@ -82,7 +84,7 @@ GET /api/v1/persons?object_id=obj_avloniy&date_from=2026-07-01&date_to=2026-07-1
 
 Параметры: `object_id`, `object_index`, `date_from`, `date_to`, `limit`, `offset`.
 `Unknown`/`LOW_QUALITY` исключены всегда. Если задан `object_id`, в корне ответа
-дополнительно `object_id` и `object_index` (индекс объекта во внешней системе).
+дополнительно `object_id`, `object_index`, `zakazchik_inn`, `construction_inn`.
 
 Элемент `items`:
 ```json
@@ -131,6 +133,8 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
   "object_id": "obj_avloniy",
   "object_name": "Avloniy",
   "object_index": 41109,
+  "zakazchik_inn": "204775594",
+  "construction_inn": "203658827",
   "camera_id": "cam03",
   "zone": "Avloniy - 1",
   "plate": "01S772SB",
@@ -161,6 +165,13 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
 - `""` — не определён (номер не по формату РУз).
 
 **`owner_inn`** — ИНН организации-владельца из ГАИ (пусто у физлиц).
+
+**`zakazchik_inn` / `construction_inn`** — ИНН заказчика и генподрядчика ОБЪЕКТА,
+на камере которого произошло событие. Берутся из `objects[]` в `config/cameras.yaml`
+(поля `zakazchik_inn` / `construction_inn`) — правка конфига меняет ответ без
+изменения кода. Для событий без объекта (`object_id: default`) — `null`.
+Присутствуют в items `/api/v1/faces` и `/api/v1/vehicles`; в `/api/v1/persons` —
+в корне ответа при фильтре по объекту.
 
 **`has_contract`** — сверка с налогом (были ли счета-фактуры владелец ТС →
 заказчик/генподрядчик объекта за `integration.facturas_months`):
