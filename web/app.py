@@ -283,7 +283,10 @@ def _owner_contract_where(owner_type: str, contract: str, where: list, params: l
         where.append("owner_type = ?"); params.append(owner_type)
     elif owner_type == "unknown":
         where.append("(owner_type IS NULL OR owner_type = '')")
-    if contract in ("0", "1", "2"):
+    if contract == "0":
+        # ещё не проверенные тоже считаются «без договора» (API отдаёт им 0)
+        where.append("(has_contract = 0 OR has_contract IS NULL)")
+    elif contract in ("1", "2"):
         where.append("has_contract = ?"); params.append(int(contract))
     elif contract == "unchecked":
         where.append("has_contract IS NULL")
@@ -353,8 +356,8 @@ def api_vehicle_events(camera: str = Query("", description="фильтр по ca
                     "gai_status": r["gai_status"] or "",
                     "owner_type": r["owner_type"] or "",
                     "owner_inn": r["owner_inn"] or "",
-                    # 0=фактур нет, 1=есть, 2=машина генподрядчика, null=не проверялся
-                    "has_contract": r["has_contract"],
+                    # ВСЕГДА число: 0=фактур нет (в т.ч. ещё не проверен), 1=есть, 2=машина генподрядчика
+                    "has_contract": 0 if r["has_contract"] is None else r["has_contract"],
                     "events_count": r["cnt"],
                 })
     except sqlite3.OperationalError:
@@ -838,8 +841,8 @@ def api_v1_vehicles(request: Request,
             "owner_type": r["owner_type"] or "",
             "owner_inn": r["owner_inn"] or "",
             "owner_name": pi.get("owner_name") or "",
-            # 0=фактур нет, 1=есть, 2=машина генподрядчика, null=не проверялся
-            "has_contract": r["has_contract"],
+            # ВСЕГДА число: 0=фактур нет (в т.ч. ещё не проверен), 1=есть, 2=машина генподрядчика
+            "has_contract": 0 if r["has_contract"] is None else r["has_contract"],
             "gai_checked_dt": _iso(pi.get("gai_checked")) if pi.get("gai_checked") else "",
             "soliq_checked_dt": _iso(pi.get("soliq_checked")) if pi.get("soliq_checked") else "",
             "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
@@ -901,7 +904,7 @@ def api_v1_vehicles_stats(object_id: str = Query("", description="фильтр �
     object_id = _resolve_object_index(object_index, object_id)
     empty = {"vehicles_total": 0, "events_total": 0,
              "by_owner_type": {"yuridik": 0, "shaxsiy": 0, "kompaniya": 0, "unknown": 0},
-             "by_contract": {"with": 0, "without": 0, "kompaniya": 0, "unchecked": 0}}
+             "by_contract": {"with": 0, "without": 0, "kompaniya": 0}}
     if not os.path.exists(DB_PATH):
         return empty
     where, params = [], []
@@ -919,7 +922,7 @@ def api_v1_vehicles_stats(object_id: str = Query("", description="фильтр �
     where.append("plate_normalized != ''")
     cond = " WHERE " + " AND ".join(where)
     by_owner = {"yuridik": 0, "shaxsiy": 0, "kompaniya": 0, "unknown": 0}
-    by_contract = {"with": 0, "without": 0, "kompaniya": 0, "unchecked": 0}
+    by_contract = {"with": 0, "without": 0, "kompaniya": 0}
     try:
         with _db() as conn:
             events_total = conn.execute(
@@ -934,9 +937,8 @@ def api_v1_vehicles_stats(object_id: str = Query("", description="фильтр �
     for r in rows:
         ot = r["owner_type"] if r["owner_type"] in _OWNER_TYPES else "unknown"
         by_owner[ot] += 1
-        if r["has_contract"] is None:
-            by_contract["unchecked"] += 1
-        elif r["has_contract"] == 2:
+        # не проверенные считаем «без договора» (как в items: null -> 0)
+        if r["has_contract"] == 2:
             by_contract["kompaniya"] += 1
         else:
             by_contract["with" if r["has_contract"] else "without"] += 1

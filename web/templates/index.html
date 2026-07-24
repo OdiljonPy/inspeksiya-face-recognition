@@ -91,7 +91,6 @@
       <option value="1">Есть фактуры</option>
       <option value="0">Нет фактур</option>
       <option value="2">Машина генподрядчика</option>
-      <option value="unchecked">Не проверен</option>
     </select>
   </label>
   <label class="muted hidden" id="dedupWrap" title="Один ряд на номер: последний проезд + счётчик">
@@ -558,12 +557,11 @@ function ownerBadge(t) {
 }
 
 function contractBadge(hc, ownerType) {
-  // has_contract: 0=фактур нет, 1=есть, 2=машина генподрядчика, null=не проверялся
+  // has_contract ВСЕГДА число: 0=фактур нет, 1=есть, 2=машина генподрядчика
   if (hc === 1) return '<span class="badge seen">есть</span>';
-  if (hc === 0) return '<span class="badge new">нет</span>';
   if (hc === 2 || ownerType === "kompaniya")
     return '<span class="badge seen" title="машина генподрядчика — договор не нужен">генподрядчик</span>';
-  return '<span class="muted" title="не проверялся">—</span>';
+  return '<span class="badge new">нет</span>';
 }
 
 async function loadVehicles() {

@@ -189,6 +189,15 @@ class GaiChecker(threading.Thread):
         except Exception:
             pass
         if status != "found" or not data:
+            # машины нет в базе ГАИ -> владельца/ИНН нет -> фактур быть не может: код 0.
+            # При error оставляем как есть (перепроверится), API отдаёт 0 по умолчанию.
+            if status == "not_found":
+                try:
+                    self.vlog.set_contract_plate(plate, object_id, 0)
+                    self.vlog.upsert_soliq_info(plate, object_id, {
+                        "has_contract": 0, "reason": "not_in_gai", "facturas": []})
+                except Exception:
+                    pass
             return
         # тип владельца по данным ГАИ (авторитетнее формата номера)
         constr_inn = str((self.objects.get(object_id) or {}).get("construction_inn") or "")
@@ -198,9 +207,6 @@ class GaiChecker(threading.Thread):
                 self.vlog.set_owner_plate(plate, object_id, owner_type, owner_inn)
         except Exception:
             pass
-        # сверка с налогом: только юрлица с ИНН; машине генподрядчика договор не нужен
-        if not self.facturas_url or not owner_inn.isdigit():
-            return
         try:
             if owner_type == OWNER_KOMPANIYA:
                 # код 2 = машина генподрядчика (договор не нужен); фиксируем и в
@@ -209,6 +215,14 @@ class GaiChecker(threading.Thread):
                 self.vlog.upsert_soliq_info(plate, object_id, {
                     "has_contract": 2, "reason": "kompaniya", "facturas": []})
                 return
+            if not owner_inn.isdigit():
+                # физлицо/владелец без ИНН — фактуры по ИНН невозможны: код 0
+                self.vlog.set_contract_plate(plate, object_id, 0)
+                self.vlog.upsert_soliq_info(plate, object_id, {
+                    "has_contract": 0, "reason": "no_inn", "facturas": []})
+                return
+            if not self.facturas_url:
+                return                             # сверка выключена конфигом
             has_contract, facturas = self._contract(owner_inn, object_id)
             if has_contract is not None:
                 self.vlog.set_contract_plate(plate, object_id, has_contract)

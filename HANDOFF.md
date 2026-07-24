@@ -237,12 +237,15 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   УДАЛЁН по запросу пользователя 18.07.2026 (details=1 покрывает).
   scripts/backfill_owner_contract.py теперь НЕ нужен (sweep делает то же
   автоматически) — оставлен для ручного прогона.
-  **has_contract — КОДЫ (18.07.2026, требование пользователя):** 0=фактур нет,
-  1=есть, 2=машина генподрядчика (раньше NULL), NULL=не проверялся. API отдаёт
-  сырое число (не bool!), фильтр has_contract/contract принимает и '2'.
-  Идемпотентная миграция NULL->2 для owner_type='kompaniya' — при старте
-  main.py (VehicleLog) и дашборда (_ensure_schema). stats.by_contract получил
-  ведро kompaniya. Бейдж «Договор» в дашборде понимает коды.
+  **has_contract — КОДЫ, БЕЗ NULL в API (18.07.2026, требование пользователя):**
+  0=фактур нет, 1=есть, 2=машина генподрядчика. Проверяется КАЖДЫЙ номер:
+  not_found в ГАИ -> 0 (reason not_in_gai), физлицо без ИНН -> 0 (reason no_inn),
+  kompaniya -> 2 — всё пишется явно в события + soliq_json (sweep сходится).
+  В БД NULL остаётся только у «ещё в очереди/сервис упал» — API отдаёт таким 0
+  (COALESCE), фильтр '0' ловит и NULL. stats.by_contract: with/without/kompaniya
+  (unchecked влит в without). Идемпотентная миграция NULL->2 для
+  owner_type='kompaniya' — при старте main.py и дашборда. Бейдж «Договор» в
+  дашборде понимает коды, опция «Не проверен» убрана.
 - **Известные люди / known faces (18.07.2026)**: работники заводятся с внешней
   платформы по фото. Identity в gallery.py расширен ПОЛЯМИ (name, known,
   object_index — дефолты пустые, старый meta.json совместим; логика
