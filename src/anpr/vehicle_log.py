@@ -51,8 +51,8 @@ class VehicleLog:
                                                              -- found | not_found | error | NULL (не проверялся)
                 owner_type       TEXT,                       -- shaxsiy | yuridik | kompaniya | NULL (неизвестно)
                 owner_inn        TEXT,                       -- ИНН владельца ТС (из ГАИ, только юрлица)
-                has_contract     INTEGER                     -- сверка с налогом: 1=фактуры есть,
-                                                             -- 0=нет, NULL=не проверялся/неприменимо
+                has_contract     INTEGER                     -- сверка с налогом: 0=фактур нет, 1=есть,
+                                                             -- 2=машина генподрядчика, NULL=не проверялся
             )
         """)
         # миграция старых БД (идемпотентно)
@@ -90,6 +90,9 @@ class VehicleLog:
                 soliq_checked REAL      -- unix ts последней сверки с налогом
             )
         """)
+        # миграция кода 2: ранее машины генподрядчика оставались NULL — проставить 2
+        self.conn.execute("UPDATE vehicle_events SET has_contract=2 "
+                          "WHERE owner_type='kompaniya' AND has_contract IS NULL")
         self.conn.commit()
 
     def log(self, camera_id, zone, plate_text, plate_normalized, confidence,

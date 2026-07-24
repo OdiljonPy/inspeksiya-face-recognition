@@ -90,6 +90,7 @@
       <option value="" selected>Все</option>
       <option value="1">Есть фактуры</option>
       <option value="0">Нет фактур</option>
+      <option value="2">Машина генподрядчика</option>
       <option value="unchecked">Не проверен</option>
     </select>
   </label>
@@ -557,9 +558,11 @@ function ownerBadge(t) {
 }
 
 function contractBadge(hc, ownerType) {
-  if (hc === true)  return '<span class="badge seen">есть</span>';
-  if (hc === false) return '<span class="badge new">нет</span>';
-  if (ownerType === "kompaniya") return '<span class="muted" title="машина генподрядчика — договор не нужен">н/п</span>';
+  // has_contract: 0=фактур нет, 1=есть, 2=машина генподрядчика, null=не проверялся
+  if (hc === 1) return '<span class="badge seen">есть</span>';
+  if (hc === 0) return '<span class="badge new">нет</span>';
+  if (hc === 2 || ownerType === "kompaniya")
+    return '<span class="badge seen" title="машина генподрядчика — договор не нужен">генподрядчик</span>';
   return '<span class="muted" title="не проверялся">—</span>';
 }
 

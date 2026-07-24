@@ -233,9 +233,16 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   сходится: kompaniya/бez ИНН помечаются в soliq_json как not_applicable и не
   перепроверяются). check_contract теперь возвращает (hc, facturas).
   API: /api/v1/vehicles items + owner_name/gai_checked_dt/soliq_checked_dt;
-  details=1 -> полные gai_info/soliq_info; НОВЫЙ GET /api/v1/vehicles/info/{plate}
-  (накопленное, без похода во внешние сервисы). scripts/backfill_owner_contract.py
-  теперь НЕ нужен (sweep делает то же автоматически) — оставлен для ручного прогона.
+  details=1 -> полные gai_info/soliq_info. Эндпоинт /api/v1/vehicles/info/{plate}
+  УДАЛЁН по запросу пользователя 18.07.2026 (details=1 покрывает).
+  scripts/backfill_owner_contract.py теперь НЕ нужен (sweep делает то же
+  автоматически) — оставлен для ручного прогона.
+  **has_contract — КОДЫ (18.07.2026, требование пользователя):** 0=фактур нет,
+  1=есть, 2=машина генподрядчика (раньше NULL), NULL=не проверялся. API отдаёт
+  сырое число (не bool!), фильтр has_contract/contract принимает и '2'.
+  Идемпотентная миграция NULL->2 для owner_type='kompaniya' — при старте
+  main.py (VehicleLog) и дашборда (_ensure_schema). stats.by_contract получил
+  ведро kompaniya. Бейдж «Договор» в дашборде понимает коды.
 - **Известные люди / known faces (18.07.2026)**: работники заводятся с внешней
   платформы по фото. Identity в gallery.py расширен ПОЛЯМИ (name, known,
   object_index — дефолты пустые, старый meta.json совместим; логика

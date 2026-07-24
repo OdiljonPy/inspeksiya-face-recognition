@@ -115,7 +115,7 @@ GET /api/v1/vehicles
 | `valid` | `1` — только валидные по формату РУз, `0` — только невалидные |
 | `gai` | статус проверки по базе ГАИ: `found` / `not_found` (машины нет в базе) / `error` / `unchecked` |
 | `owner_type` | тип владельца: `shaxsiy` (физлицо) / `yuridik` (юрлицо) / `kompaniya` (машина генподрядчика объекта) / `unknown` (не определён) |
-| `has_contract` | сверка с налогом: `1` — фактуры с заказчиком/генподрядчиком есть, `0` — нет, `unchecked` — не проверялся |
+| `has_contract` | сверка с налогом: `1` — фактуры есть, `0` — нет, `2` — машина генподрядчика, `unchecked` — не проверялся |
 | `details` | `1` — добавить в каждый item `gai_info` (полный сохранённый ответ ГАИ) и `soliq_info` (фактуры по объекту события) |
 | `date_from`, `date_to` | период |
 | `limit`, `offset` | пагинация |
@@ -148,7 +148,7 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
   "owner_type": "yuridik",
   "owner_inn": "301234567",
   "owner_name": "OOO QURILISH",
-  "has_contract": true,
+  "has_contract": 1,
   "gai_checked_dt": "2026-07-18 12:00:00",
   "soliq_checked_dt": "2026-07-18 12:00:05",
   "confidence": 0.84,
@@ -178,9 +178,11 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
 в корне ответа при фильтре по объекту.
 
 **`has_contract`** — сверка с налогом (были ли счета-фактуры владелец ТС →
-заказчик/генподрядчик объекта за `integration.facturas_months`):
-`true` — фактуры есть, `false` — нет, `null` — не проверялся или неприменимо
-(физлицо без ИНН, машина генподрядчика, сервис недоступен).
+заказчик/генподрядчик объекта за `integration.facturas_months`). Коды:
+- `0` — договора нет (фактур не найдено);
+- `1` — договор есть (фактуры найдены);
+- `2` — машина генподрядчика объекта (договор не нужен);
+- `null` — ещё не проверялся (физлицо без ИНН, сервис недоступен, нет ИНН у объекта).
 
 **Автозаполнение (в т.ч. старые данные):** проверка ГАИ + сверка с налогом идут
 фоном для каждого НОВОГО события, а при старте `main.py` sweep дозаполняет ВСЕ
@@ -214,12 +216,12 @@ GET /api/v1/vehicles/stats?object_id=obj_avloniy&date_from=2026-07-01
   "object_id": "obj_avloniy",
   "object_index": 41109,
   "by_owner_type": { "yuridik": 25, "shaxsiy": 12, "kompaniya": 3, "unknown": 2 },
-  "by_contract": { "with": 18, "without": 7, "unchecked": 17 }
+  "by_contract": { "with": 18, "without": 7, "kompaniya": 3, "unchecked": 14 }
 }
 ```
 `by_owner_type` — число машин юрлиц / физлиц / генподрядчика / неопределённых.
-`by_contract` — машины с фактурами / без / непроверенные (машины генподрядчика
-не сверяются — попадают в `unchecked`).
+`by_contract` — машины с фактурами (`has_contract=1`) / без (`0`) /
+генподрядчика (`2`) / непроверенные (`null`).
 
 ---
 
@@ -274,38 +276,6 @@ GET /api/v1/tax-check?owner_inn=<ИНН>&object_id=<объект>[&plate=<ном
 has_contract, start_date, end_date, checks: [{role, buyer_inn, facturas | error}]}`.
 `has_contract`: `true` — фактуры есть хотя бы с одним из ИНН объекта, `false` — нет,
 `null` — все запросы к сервису упали.
-
----
-
-## API 2г — накопленная информация ГАИ + soliq по номеру
-
-```
-GET /api/v1/vehicles/info/{plate}
-```
-
-Отдаёт СОХРАНЁННЫЕ данные из фоновых проверок (без похода во внешние сервисы —
-быстро и работает, даже когда ГАИ/налоговая недоступны). Для живой проверки —
-`/api/v1/vehicles/owner/{plate}` и `/api/v1/tax-check`.
-
-```json
-{
-  "plate": "01123ABC",
-  "gai_status": "found",
-  "gai_checked_dt": "2026-07-18 12:00:00",
-  "owner_inn": "301234567",
-  "owner_name": "OOO QURILISH",
-  "gai_info": { "pResult": 1, "pOwner": "OOO QURILISH", "vehicles": [ { "...": "полный ответ ГАИ" } ] },
-  "soliq": {
-    "obj_avloniy": { "has_contract": 1, "owner_inn": "301234567",
-                     "facturas": [ { "facturaNo": "...", "...": "..." } ],
-                     "checked": 1783657805.0 }
-  },
-  "soliq_checked_dt": "2026-07-18 12:00:05"
-}
-```
-`soliq` — сверка по КАЖДОМУ объекту, где машина появлялась. У машин
-генподрядчика вместо фактур `{"has_contract": null, "reason": "kompaniya"}`.
-Номер, который ещё не проверялся → `404`.
 
 ---
 

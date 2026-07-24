@@ -203,9 +203,11 @@ class GaiChecker(threading.Thread):
             return
         try:
             if owner_type == OWNER_KOMPANIYA:
-                # фиксируем «неприменимо», чтобы sweep не перепроверял на каждом старте
+                # код 2 = машина генподрядчика (договор не нужен); фиксируем и в
+                # soliq_json, чтобы sweep не перепроверял на каждом старте
+                self.vlog.set_contract_plate(plate, object_id, 2)
                 self.vlog.upsert_soliq_info(plate, object_id, {
-                    "has_contract": None, "reason": "kompaniya", "facturas": []})
+                    "has_contract": 2, "reason": "kompaniya", "facturas": []})
                 return
             has_contract, facturas = self._contract(owner_inn, object_id)
             if has_contract is not None:
