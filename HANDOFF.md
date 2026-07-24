@@ -222,6 +222,20 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   с объектом финансово. Если ИНН владельца ТС СОВПАДАЕТ с construction_inn объекта —
   вверху модалки ГАИ яркий зелёный баннер «МАШИНА ПРИНАДЛЕЖИТ ГЕНПОДРЯДЧИКУ»
   (проверка на фронте: /api/objects отдаёт ИНН-ы объектов из cameras.yaml).
+- **Полные данные ГАИ + soliq по каждому номеру, авто-бэкфилл старых (18.07.2026)**:
+  таблица `plate_info` (по уникальному номеру): gai_status, ПОЛНЫЙ JSON ответа ГАИ,
+  owner_inn/owner_name, soliq_json ({object_id: {has_contract, facturas, checked}}),
+  timestamps. Наполняют: фоновый GaiChecker (теперь _process обновляет ВСЕ события
+  номера — set_*_plate методы VehicleLog), ручные проверки из дашборда
+  (/api/gai, /api/tax-check) и СТАРТОВЫЙ SWEEP (gai_checker.sweep_old в main.py,
+  выключатель integration.gai_backfill_on_start) — на старте дозаполняет все
+  старые номера, у которых чего-то не хватает (VehicleLog.pending_checks;
+  сходится: kompaniya/бez ИНН помечаются в soliq_json как not_applicable и не
+  перепроверяются). check_contract теперь возвращает (hc, facturas).
+  API: /api/v1/vehicles items + owner_name/gai_checked_dt/soliq_checked_dt;
+  details=1 -> полные gai_info/soliq_info; НОВЫЙ GET /api/v1/vehicles/info/{plate}
+  (накопленное, без похода во внешние сервисы). scripts/backfill_owner_contract.py
+  теперь НЕ нужен (sweep делает то же автоматически) — оставлен для ручного прогона.
 - **Известные люди / known faces (18.07.2026)**: работники заводятся с внешней
   платформы по фото. Identity в gallery.py расширен ПОЛЯМИ (name, known,
   object_index — дефолты пустые, старый meta.json совместим; логика

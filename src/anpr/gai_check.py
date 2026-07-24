@@ -90,9 +90,11 @@ def check_contract(url: str, owner_inn: str, buyer_inns: list[str],
                    start_date: str, end_date: str, timeout: float):
     """
     Сверка с налогом: фактуры владелец ТС (продавец) -> каждый buyer_inn (покупатель).
-    Возвращает 1 (фактуры есть), 0 (ни одной) или None (все запросы упали — не знаем).
+    Возвращает (has_contract, facturas): 1 + список фактур, 0 + [] (ни одной),
+    None + [] (все запросы упали — не знаем).
     """
     any_ok = False
+    facturas = []
     for buyer in buyer_inns:
         if not buyer or not str(buyer).strip().isdigit():
             continue
@@ -103,9 +105,10 @@ def check_contract(url: str, owner_inn: str, buyer_inns: list[str],
         except Exception:
             continue                               # сервис упал по этому покупателю
         any_ok = True
-        if data.get("facturas"):
-            return 1
-    return 0 if any_ok else None
+        facturas.extend(data.get("facturas") or [])
+    if not any_ok:
+        return None, []
+    return (1 if facturas else 0), facturas
 
 
 class GaiChecker(threading.Thread):
@@ -152,15 +155,15 @@ class GaiChecker(threading.Thread):
         return status, data
 
     def _contract(self, owner_inn: str, object_id: str):
-        """has_contract по кэшу (ИНН, объект) или запросами к налоговой."""
+        """(has_contract, facturas) по кэшу (ИНН, объект) или запросами к налоговой."""
         obj = self.objects.get(object_id) or {}
         buyers = [str(obj.get("zakazchik_inn") or ""), str(obj.get("construction_inn") or "")]
         if not any(b.strip().isdigit() for b in buyers):
-            return None                            # у объекта нет ИНН — сверять не с кем
+            return None, []                        # у объекта нет ИНН — сверять не с кем
         key = (owner_inn, object_id)
         now = time.time()
         hit = self._contract_cache.get(key)
-        if hit and now - hit[0] < self.cache_ttl and hit[1] is not None:
+        if hit and now - hit[0] < self.cache_ttl and hit[1][0] is not None:
             return hit[1]
         start_s, end_s = contract_period(self.facturas_months)
         res = check_contract(self.facturas_url, owner_inn, buyers,
@@ -172,31 +175,68 @@ class GaiChecker(threading.Thread):
                                     if v[0] >= cutoff}
         return res
 
+    def _process(self, plate: str, object_id: str):
+        """
+        Полная проверка номера на объекте: ГАИ (статус + владелец + полный JSON в
+        plate_info) и сверка с налогом (has_contract + фактуры). Обновляются ВСЕ
+        события этого номера (важно для sweep-а по старым данным).
+        """
+        status, data = self._fetch(plate)
+        try:
+            self.vlog.set_gai_status_plate(plate, status)
+            self.vlog.upsert_gai_info(plate, status, data)
+            self.checked += 1
+        except Exception:
+            pass
+        if status != "found" or not data:
+            return
+        # тип владельца по данным ГАИ (авторитетнее формата номера)
+        constr_inn = str((self.objects.get(object_id) or {}).get("construction_inn") or "")
+        owner_type, owner_inn = owner_from_gai(data, constr_inn)
+        try:
+            if owner_type or owner_inn:
+                self.vlog.set_owner_plate(plate, object_id, owner_type, owner_inn)
+        except Exception:
+            pass
+        # сверка с налогом: только юрлица с ИНН; машине генподрядчика договор не нужен
+        if not self.facturas_url or not owner_inn.isdigit():
+            return
+        try:
+            if owner_type == OWNER_KOMPANIYA:
+                # фиксируем «неприменимо», чтобы sweep не перепроверял на каждом старте
+                self.vlog.upsert_soliq_info(plate, object_id, {
+                    "has_contract": None, "reason": "kompaniya", "facturas": []})
+                return
+            has_contract, facturas = self._contract(owner_inn, object_id)
+            if has_contract is not None:
+                self.vlog.set_contract_plate(plate, object_id, has_contract)
+                self.vlog.upsert_soliq_info(plate, object_id, {
+                    "has_contract": has_contract, "owner_inn": owner_inn,
+                    "facturas": facturas})
+        except Exception:
+            pass
+
     def run(self):
         while True:
-            rowid, plate, object_id = self.q.get()
-            status, data = self._fetch(plate)
-            try:
-                self.vlog.set_gai_status(rowid, status)
-                self.checked += 1
-            except Exception:
-                pass
-            if status != "found" or not data:
-                continue
-            # тип владельца по данным ГАИ (авторитетнее формата номера)
-            constr_inn = str((self.objects.get(object_id) or {}).get("construction_inn") or "")
-            owner_type, owner_inn = owner_from_gai(data, constr_inn)
-            try:
-                if owner_type or owner_inn:
-                    self.vlog.set_owner(rowid, owner_type, owner_inn)
-            except Exception:
-                pass
-            # сверка с налогом: только юрлица с ИНН; машине генподрядчика договор не нужен
-            if (self.facturas_url and owner_inn.isdigit()
-                    and owner_type != OWNER_KOMPANIYA):
-                has_contract = self._contract(owner_inn, object_id)
-                if has_contract is not None:
-                    try:
-                        self.vlog.set_contract(rowid, has_contract)
-                    except Exception:
-                        pass
+            _rowid, plate, object_id = self.q.get()
+            self._process(plate, object_id)
+
+    def sweep_old(self, delay: float = 0.5):
+        """
+        Разовый проход по СТАРЫМ событиям: ставит в очередь все (номер, объект),
+        которым не хватает проверки ГАИ/soliq (см. VehicleLog.pending_checks).
+        Запускать отдельным потоком после start(); дедуп сетевых запросов —
+        кэшами по номеру и (ИНН, объект). delay бережёт внешние сервисы.
+        """
+        try:
+            pending = self.vlog.pending_checks()
+        except Exception:
+            return
+        if not pending:
+            return
+        print(f"[gai-sweep] непроверенных (номер, объект): {len(pending)}")
+        for plate, object_id in pending:
+            # object_id как есть (может быть NULL у древних событий — IS ? его матчит)
+            self.q.put((0, plate, object_id))       # блокируется при полной очереди
+            time.sleep(delay)
+        print(f"[gai-sweep] очередь заполнена, проверка идёт в фоне")

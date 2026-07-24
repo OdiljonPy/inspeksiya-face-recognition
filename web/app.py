@@ -153,6 +153,23 @@ def _ensure_schema():
                 c.commit()
             except sqlite3.OperationalError:
                 pass  # колонка/таблица уже есть или таблицы ещё нет
+        # справочник ГАИ/soliq по уникальным номерам (наполняет фоновая проверка main.py)
+        try:
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS plate_info (
+                    plate_normalized TEXT PRIMARY KEY,
+                    gai_status    TEXT,
+                    gai_json      TEXT,
+                    gai_checked   REAL,
+                    owner_inn     TEXT,
+                    owner_name    TEXT,
+                    soliq_json    TEXT,
+                    soliq_checked REAL
+                )
+            """)
+            c.commit()
+        except sqlite3.OperationalError:
+            pass
 
 
 _ensure_schema()
@@ -749,6 +766,7 @@ def api_v1_vehicles(request: Request,
                     gai: str = Query("", description="found|not_found|error|unchecked|'' (все)"),
                     owner_type: str = Query("", description="shaxsiy|yuridik|kompaniya|unknown|'' (все)"),
                     has_contract: str = Query("", description="'1' — фактуры есть, '0' — нет, unchecked|'' (все)"),
+                    details: int = Query(0, description="1 = добавить в items полный ответ ГАИ (gai_info) и фактуры (soliq_info)"),
                     date_from: str = Query(""), date_to: str = Query(""),
                     limit: int = Query(100, ge=1, le=1000),
                     offset: int = Query(0, ge=0)):
@@ -790,10 +808,12 @@ def api_v1_vehicles(request: Request,
                 "ORDER BY timestamp DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
     except sqlite3.OperationalError:
         return {"total": 0, "limit": limit, "offset": offset, "items": []}   # таблицы ещё нет
+    info = _plate_info_map({r["plate_normalized"] for r in rows if r["plate_normalized"]})
     items = []
     for r in rows:
         pp = _plate_validator().parse(r["plate_normalized"] or "")
-        items.append({
+        pi = info.get(r["plate_normalized"]) or {}
+        item = {
             "id": r["id"], "ts": r["timestamp"], "datetime": _iso(r["timestamp"]),
             "object_id": r["object_id"],
             "object_name": names.get(r["object_id"], r["object_id"]),
@@ -808,12 +828,76 @@ def api_v1_vehicles(request: Request,
             "gai_status": r["gai_status"] or "",
             "owner_type": r["owner_type"] or "",
             "owner_inn": r["owner_inn"] or "",
+            "owner_name": pi.get("owner_name") or "",
             "has_contract": None if r["has_contract"] is None else bool(r["has_contract"]),
+            "gai_checked_dt": _iso(pi.get("gai_checked")) if pi.get("gai_checked") else "",
+            "soliq_checked_dt": _iso(pi.get("soliq_checked")) if pi.get("soliq_checked") else "",
             "confidence": round(r["confidence"], 3) if r["confidence"] is not None else None,
             "plate_url": _abs(request, _plate_url(r["snapshot_path"])),
             "full_url": _abs(request, _full_url(r["full_path"])),
-        })
+        }
+        if details:
+            item["gai_info"] = pi.get("gai_info")            # полный ответ ГАИ | null
+            soliq = pi.get("soliq") or {}
+            item["soliq_info"] = soliq.get(r["object_id"] or "default")   # фактуры по объекту события | null
+        items.append(item)
     return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+def _plate_info_map(plates: set) -> dict:
+    """plate -> {owner_name, gai_checked, soliq_checked, gai_info, soliq} из plate_info."""
+    if not plates:
+        return {}
+    out = {}
+    ph = ",".join("?" * len(plates))
+    try:
+        with _db() as conn:
+            for r in conn.execute(
+                    "SELECT plate_normalized, gai_status, gai_json, gai_checked, "
+                    f"owner_inn, owner_name, soliq_json, soliq_checked FROM plate_info "
+                    f"WHERE plate_normalized IN ({ph})", list(plates)):
+                def _loads(s):
+                    try:
+                        return json.loads(s) if s else None
+                    except (ValueError, TypeError):
+                        return None
+                out[r["plate_normalized"]] = {
+                    "gai_status": r["gai_status"] or "",
+                    "owner_inn": r["owner_inn"] or "",
+                    "owner_name": r["owner_name"] or "",
+                    "gai_checked": r["gai_checked"],
+                    "soliq_checked": r["soliq_checked"],
+                    "gai_info": _loads(r["gai_json"]),
+                    "soliq": _loads(r["soliq_json"]) or {},
+                }
+    except sqlite3.OperationalError:
+        pass                                    # таблицы plate_info ещё нет
+    return out
+
+
+@app.get("/api/v1/vehicles/info/{plate}")
+def api_v1_vehicle_info(plate: str):
+    """
+    API 2г: НАКОПЛЕННАЯ информация ГАИ + soliq по номеру (из фоновых проверок,
+    без похода во внешние сервисы). gai_info — полный ответ ГАИ; soliq —
+    сверка с налогом по каждому объекту, где машина появлялась
+    ({object_id: {has_contract, facturas, checked}}). Для живой проверки —
+    /api/v1/vehicles/owner/{plate} и /api/v1/tax-check.
+    """
+    norm = re.sub(r"[^A-Z0-9]", "", plate.upper())
+    pi = _plate_info_map({norm}).get(norm)
+    if pi is None:
+        raise HTTPException(status_code=404,
+                            detail=f"номер {norm} ещё не проверялся (или не встречался)")
+    return {
+        "plate": norm,
+        "gai_status": pi["gai_status"],
+        "gai_checked_dt": _iso(pi["gai_checked"]) if pi["gai_checked"] else "",
+        "owner_inn": pi["owner_inn"], "owner_name": pi["owner_name"],
+        "gai_info": pi["gai_info"],
+        "soliq": pi["soliq"],
+        "soliq_checked_dt": _iso(pi["soliq_checked"]) if pi["soliq_checked"] else "",
+    }
 
 
 @app.get("/api/v1/vehicles/stats")
@@ -1201,6 +1285,7 @@ def api_gai(plate: str):
         if e.code in (404, 500):
             # по договорённости: 404/500 = машины нет в базе ГАИ
             _set_gai_status_by_plate(plate, "not_found")
+            _upsert_plate_gai(plate, "not_found", None)
             data = {"pResult": 0, "pComment": f"Нет в базе ГАИ (HTTP {e.code})"}
             with _GAI_LOCK:
                 _GAI_CACHE[plate] = (now, data)
@@ -1208,9 +1293,10 @@ def api_gai(plate: str):
         raise HTTPException(status_code=502, detail=f"сервис ГАИ ответил ошибкой: HTTP {e.code}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"сервис ГАИ недоступен: {e}")
-    # ручная проверка тоже обновляет статус событий этого номера
+    # ручная проверка тоже обновляет статус событий этого номера + справочник plate_info
     found = data.get("pResult") == 1
     _set_gai_status_by_plate(plate, "found" if found else "not_found")
+    _upsert_plate_gai(plate, "found" if found else "not_found", data if found else None)
     if found:
         _set_owner_by_plate(plate, data)
     with _GAI_LOCK:
@@ -1226,6 +1312,54 @@ def _set_gai_status_by_plate(plate: str, status: str):
         with _db() as conn:
             conn.execute("UPDATE vehicle_events SET gai_status=? WHERE plate_normalized=?",
                          (status, plate))
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _upsert_plate_gai(plate: str, status: str, data: dict | None):
+    """Ручная проверка ГАИ тоже пополняет справочник plate_info (как фоновая)."""
+    if not os.path.exists(DB_PATH):
+        return
+    gai_json = json.dumps(data, ensure_ascii=False) if data else None
+    owner_inn = str((data or {}).get("pOrganizationInn") or "") or None
+    owner_name = str((data or {}).get("pOwner") or "") or None
+    try:
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO plate_info (plate_normalized, gai_status, gai_json, "
+                "gai_checked, owner_inn, owner_name) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(plate_normalized) DO UPDATE SET gai_status=excluded.gai_status, "
+                "gai_json=COALESCE(excluded.gai_json, plate_info.gai_json), "
+                "gai_checked=excluded.gai_checked, "
+                "owner_inn=COALESCE(excluded.owner_inn, plate_info.owner_inn), "
+                "owner_name=COALESCE(excluded.owner_name, plate_info.owner_name)",
+                (plate, status, gai_json, time.time(), owner_inn, owner_name))
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _upsert_plate_soliq(plate: str, object_id: str, entry: dict):
+    """Ручная сверка с налогом тоже пополняет plate_info.soliq_json (по объекту)."""
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        with _db() as conn:
+            row = conn.execute("SELECT soliq_json FROM plate_info WHERE plate_normalized=?",
+                               (plate,)).fetchone()
+            try:
+                soliq = json.loads(row["soliq_json"]) if row and row["soliq_json"] else {}
+            except (ValueError, TypeError):
+                soliq = {}
+            entry = dict(entry)
+            entry["checked"] = time.time()
+            soliq[object_id or "default"] = entry
+            conn.execute(
+                "INSERT INTO plate_info (plate_normalized, soliq_json, soliq_checked) "
+                "VALUES (?,?,?) ON CONFLICT(plate_normalized) DO UPDATE SET "
+                "soliq_json=excluded.soliq_json, soliq_checked=excluded.soliq_checked",
+                (plate, json.dumps(soliq, ensure_ascii=False), time.time()))
             conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -1346,6 +1480,9 @@ def api_tax_check(owner_inn: str = Query(..., description="ИНН владель
                 conn.commit()
         except sqlite3.OperationalError:
             pass
+        _upsert_plate_soliq(plate, object_id, {
+            "has_contract": has_contract, "owner_inn": owner_inn,
+            "facturas": [f for c in answered for f in c["facturas"]]})
     return {"owner_inn": owner_inn, "owner_name": owner_name, "object_id": object_id,
             "object_name": obj.get("name", object_id),
             "has_contract": None if has_contract is None else bool(has_contract),

@@ -3,6 +3,10 @@ r"""
 backfill_owner_contract.py — разовое заполнение owner_type / owner_inn / has_contract
 для СТАРЫХ событий транспорта (новые заполняются автоматически в main.py).
 
+УСТАРЕЛ (18.07.2026): main.py при старте сам дозаполняет старые события sweep-ом
+(integration.gai_backfill_on_start) и копит полные данные ГАИ/soliq в plate_info.
+Скрипт оставлен для ручного прогона без перезапуска сервиса.
+
 Два прохода:
   1. ОФФЛАЙН: базовый owner_type по формату тела номера ("A123BC" -> shaxsiy,
      "123ABC" -> yuridik). Не требует внешних сервисов, работает и на dev.
@@ -117,7 +121,7 @@ def main():
             if (facturas_url and inn.isdigit() and ot != OWNER_KOMPANIYA):
                 buyers = [str(obj.get("zakazchik_inn") or ""),
                           str(obj.get("construction_inn") or "")]
-                hc = check_contract(facturas_url, inn, buyers, start_s, end_s, timeout)
+                hc, _facturas = check_contract(facturas_url, inn, buyers, start_s, end_s, timeout)
                 if hc is not None:
                     conn.execute("UPDATE vehicle_events SET has_contract=? "
                                  "WHERE plate_normalized=? AND object_id IS ?",

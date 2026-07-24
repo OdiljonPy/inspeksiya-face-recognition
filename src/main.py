@@ -217,6 +217,11 @@ def main():
                                      objects=obj_inns, facturas_url=facturas_url,
                                      facturas_months=int(icfg.get("facturas_months", 3)))
             gai_checker.start()
+            # стартовый sweep по СТАРЫМ событиям: дозаполняет gai/soliq всем номерам,
+            # у которых чего-то не хватает (данные копятся в plate_info + events)
+            if icfg.get("gai_backfill_on_start", True):
+                threading.Thread(target=gai_checker.sweep_old, daemon=True,
+                                 name="gai-sweep").start()
         print(f"  ANPR GPU={anpr_engine.on_gpu}"
               f" region_ocr={'on' if region_ocr and region_ocr.ok else 'off'}"
               f" gai_check={'on' if gai_checker else 'off'}"

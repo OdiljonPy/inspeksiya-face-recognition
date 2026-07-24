@@ -116,6 +116,7 @@ GET /api/v1/vehicles
 | `gai` | статус проверки по базе ГАИ: `found` / `not_found` (машины нет в базе) / `error` / `unchecked` |
 | `owner_type` | тип владельца: `shaxsiy` (физлицо) / `yuridik` (юрлицо) / `kompaniya` (машина генподрядчика объекта) / `unknown` (не определён) |
 | `has_contract` | сверка с налогом: `1` — фактуры с заказчиком/генподрядчиком есть, `0` — нет, `unchecked` — не проверялся |
+| `details` | `1` — добавить в каждый item `gai_info` (полный сохранённый ответ ГАИ) и `soliq_info` (фактуры по объекту события) |
 | `date_from`, `date_to` | период |
 | `limit`, `offset` | пагинация |
 
@@ -146,7 +147,10 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
   "region_uncertain": false,
   "owner_type": "yuridik",
   "owner_inn": "301234567",
+  "owner_name": "OOO QURILISH",
   "has_contract": true,
+  "gai_checked_dt": "2026-07-18 12:00:00",
+  "soliq_checked_dt": "2026-07-18 12:00:05",
   "confidence": 0.84,
   "plate_url": "http://<host>/plates/1783657800000_cam03_01S772SB.jpg?v=...",
   "full_url": "http://<host>/full/1783657800000_cam03_veh.jpg?v=..."
@@ -177,6 +181,14 @@ GET /api/v1/vehicles?object_id=obj_avloniy&date_from=2026-07-12&plate=772
 заказчик/генподрядчик объекта за `integration.facturas_months`):
 `true` — фактуры есть, `false` — нет, `null` — не проверялся или неприменимо
 (физлицо без ИНН, машина генподрядчика, сервис недоступен).
+
+**Автозаполнение (в т.ч. старые данные):** проверка ГАИ + сверка с налогом идут
+фоном для каждого НОВОГО события, а при старте `main.py` sweep дозаполняет ВСЕ
+старые номера, у которых чего-то не хватает (`integration.gai_backfill_on_start`).
+Полные данные копятся в таблице `plate_info` (по уникальному номеру): весь ответ
+ГАИ, имя владельца, фактуры по каждому объекту. `owner_name` /
+`gai_checked_dt` / `soliq_checked_dt` в items — из неё; `details=1` отдаёт и
+полные `gai_info` / `soliq_info`.
 
 ---
 
@@ -262,6 +274,38 @@ GET /api/v1/tax-check?owner_inn=<ИНН>&object_id=<объект>[&plate=<ном
 has_contract, start_date, end_date, checks: [{role, buyer_inn, facturas | error}]}`.
 `has_contract`: `true` — фактуры есть хотя бы с одним из ИНН объекта, `false` — нет,
 `null` — все запросы к сервису упали.
+
+---
+
+## API 2г — накопленная информация ГАИ + soliq по номеру
+
+```
+GET /api/v1/vehicles/info/{plate}
+```
+
+Отдаёт СОХРАНЁННЫЕ данные из фоновых проверок (без похода во внешние сервисы —
+быстро и работает, даже когда ГАИ/налоговая недоступны). Для живой проверки —
+`/api/v1/vehicles/owner/{plate}` и `/api/v1/tax-check`.
+
+```json
+{
+  "plate": "01123ABC",
+  "gai_status": "found",
+  "gai_checked_dt": "2026-07-18 12:00:00",
+  "owner_inn": "301234567",
+  "owner_name": "OOO QURILISH",
+  "gai_info": { "pResult": 1, "pOwner": "OOO QURILISH", "vehicles": [ { "...": "полный ответ ГАИ" } ] },
+  "soliq": {
+    "obj_avloniy": { "has_contract": 1, "owner_inn": "301234567",
+                     "facturas": [ { "facturaNo": "...", "...": "..." } ],
+                     "checked": 1783657805.0 }
+  },
+  "soliq_checked_dt": "2026-07-18 12:00:05"
+}
+```
+`soliq` — сверка по КАЖДОМУ объекту, где машина появлялась. У машин
+генподрядчика вместо фактур `{"has_contract": null, "reason": "kompaniya"}`.
+Номер, который ещё не проверялся → `404`.
 
 ---
 
