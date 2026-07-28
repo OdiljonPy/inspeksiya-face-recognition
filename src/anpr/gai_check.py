@@ -39,6 +39,21 @@ def _post_json(url: str, payload: dict, timeout: float) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
+def gai_found(data: dict | None) -> bool:
+    """
+    Машина РЕАЛЬНО есть в базе ГАИ. Сервис иногда отвечает HTTP 200 с pResult=1,
+    но БЕЗ данных машины (пустой Vehicle, нет владельца) — такие номера ошибочно
+    попадали в found и ломали фильтр gai=found. Требуем pResult=1 И фактические
+    данные: непустой Vehicle ИЛИ хоть какой-то признак владельца.
+    """
+    if not data or data.get("pResult") != 1:
+        return False
+    veh = data.get("Vehicle")
+    if isinstance(veh, list) and len(veh) > 0:
+        return True
+    return bool(data.get("pOwner") or data.get("pOrganizationInn") or data.get("pPinpp"))
+
+
 def fetch_plate(url: str, plate: str, timeout: float) -> tuple[str, dict | None]:
     """
     Один запрос в ГАИ. Возвращает (статус, данные ответа | None).
@@ -46,7 +61,7 @@ def fetch_plate(url: str, plate: str, timeout: float) -> tuple[str, dict | None]
     """
     try:
         data = _post_json(url, {"plate_number": plate}, timeout)
-        return ("found" if data.get("pResult") == 1 else "not_found"), data
+        return ("found" if gai_found(data) else "not_found"), data
     except urllib.error.HTTPError as e:
         # по договорённости: 404/500 от сервиса = машины нет в базе ГАИ
         return ("not_found" if e.code in (404, 500) else "error"), None

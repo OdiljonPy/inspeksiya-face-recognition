@@ -1125,7 +1125,8 @@ def api_v1_vehicle_owner(plate: str,
         data = api_gai(norm)                 # прокси ГАИ + кэш + обновление событий в БД
     except HTTPException as e:               # сервис недоступен/не настроен — деградируем
         data, error = {}, str(e.detail)      # до базового типа по формату номера
-    found = data.get("pResult") == 1
+    from anpr.gai_check import gai_found
+    found = gai_found(data)                  # pResult=1 без данных машины = не найдена
     if found:
         from anpr.gai_check import owner_from_gai
         owner_type, owner_inn = owner_from_gai(data, constr)
@@ -1282,8 +1283,10 @@ def api_gai(plate: str):
         raise HTTPException(status_code=502, detail=f"сервис ГАИ ответил ошибкой: HTTP {e.code}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"сервис ГАИ недоступен: {e}")
-    # ручная проверка тоже обновляет статус событий этого номера + справочник plate_info
-    found = data.get("pResult") == 1
+    # ручная проверка тоже обновляет статус событий этого номера + справочник plate_info.
+    # found — через gai_found(): pResult=1 с ПУСТЫМИ данными = машины нет в базе
+    from anpr.gai_check import gai_found
+    found = gai_found(data)
     _set_gai_status_by_plate(plate, "found" if found else "not_found")
     _upsert_plate_gai(plate, "found" if found else "not_found", data if found else None)
     if found:
