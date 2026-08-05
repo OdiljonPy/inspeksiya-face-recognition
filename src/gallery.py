@@ -194,6 +194,29 @@ class Gallery:
         self.save()
         return ident
 
+    def add_new_from_track(self, agg_emb: np.ndarray, crop_bgr, ts: float) -> Identity:
+        """
+        Создать нового человека из ДОКАЗАТЕЛЬСТВ трека (track_enroll):
+        эмбеддинг — агрегат (взвешенное среднее) лучших кадров трека,
+        фото — лучший кадр (кроп уже вырезан с полями в трекере).
+        """
+        idx = len(self.identities)
+        label = f"person_{self._next_num:04d}"
+        self._next_num += 1
+
+        crop_path = os.path.join(self.faces_dir, f"{label}.jpg")
+        if crop_bgr is not None and getattr(crop_bgr, "size", 0):
+            cv2.imwrite(crop_path, _enhance_gallery_crop(crop_bgr),
+                        [cv2.IMWRITE_JPEG_QUALITY, 97])
+
+        ident = Identity(idx=idx, label=label,
+                         crop_path=os.path.relpath(crop_path, _project_root()),
+                         first_seen=ts, last_seen=ts, n_emb=0)
+        self.identities.append(ident)
+        self._append_embedding(idx, agg_emb)
+        self.save()
+        return ident
+
     def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, score: float, ts: float):
         """Добавить ещё один ракурс, если их мало и кадр достаточно «другой»."""
         ident.last_seen = ts
@@ -333,6 +356,28 @@ def _enhance_gallery_crop(crop, target_min: int = 256, max_scale: float = 2.5):
     # unsharp mask: мягко вернуть контуры после интерполяции
     blur = cv2.GaussianBlur(up, (0, 0), 1.2)
     return cv2.addWeighted(up, 1.35, blur, -0.35, 0)
+
+
+def aggregate_embeddings(embs, weights=None):
+    """
+    Агрегат «шаблона» (track_enroll): взвешенное среднее L2-нормированных
+    эмбеддингов, снова L2-нормированное. Усреднение K кадров давит пер-кадровый
+    шум эмбеддинга (~√K) — критично для мелких лиц, где одиночный кадр ненадёжен.
+    """
+    if not embs:
+        return None
+    m = np.asarray(embs, dtype=np.float32)
+    if weights is None:
+        w = np.ones(m.shape[0], dtype=np.float32)
+    else:
+        w = np.asarray(weights, dtype=np.float32)
+        if float(w.sum()) <= 0:
+            w = np.ones(m.shape[0], dtype=np.float32)
+    v = (m * w.reshape(-1, 1)).sum(axis=0)
+    n = float(np.linalg.norm(v))
+    if n < 1e-6:
+        return None
+    return (v / n).astype(np.float32)
 
 
 # ----------------------------- утилиты качества -----------------------------

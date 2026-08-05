@@ -14,7 +14,9 @@ tracker.py — Этап 4+. Лёгкий трекинг лиц по одной �
 """
 from dataclasses import dataclass
 
-from gallery import Gallery, frontality
+import numpy as np
+
+from gallery import Gallery, frontality, blur_var, aggregate_embeddings
 from results import FaceResult
 from face_quality import FaceQuality
 
@@ -34,7 +36,9 @@ def _iou(a, b) -> float:
 
 
 class _Track:
-    __slots__ = ("bbox", "label", "crop_path", "hits", "misses", "candidate_frames")
+    __slots__ = ("bbox", "label", "crop_path", "hits", "misses", "candidate_frames",
+                 "te_embs", "te_best_w", "te_best_crop", "te_best_ts",
+                 "te_first_ts", "te_last_score")
 
     def __init__(self, bbox):
         self.bbox = bbox
@@ -43,6 +47,13 @@ class _Track:
         self.hits = 0
         self.misses = 0
         self.candidate_frames = 0  # сколько кадров держится как качественный «новый» кандидат
+        # --- track_enroll: буфер доказательств для отложенного создания ID ---
+        self.te_embs = []          # [(вес качества, эмбеддинг)] кандидат-кадров
+        self.te_best_w = 0.0       # лучший вес — его кадр станет фото галереи
+        self.te_best_crop = None   # кроп лица лучшего кадра (с полями)
+        self.te_best_ts = 0.0
+        self.te_first_ts = 0.0     # ts первого кандидат-кадра (для max_wait)
+        self.te_last_score = 0.0   # последний FAISS-score (для события is_new)
 
 
 class CameraTracker:
@@ -52,6 +63,13 @@ class CameraTracker:
         self.iou_thr = float(gg["track_iou"])
         self.max_misses = int(gg["track_max_misses"])
         self.confirm = int(gg["new_id_confirm_frames"])
+        # track_enroll (шаг 1): отложенное создание ID из агрегата лучших кадров
+        # трека. ВЫКЛЮЧЕНО по умолчанию — без секции в конфиге поведение старое.
+        te = gg.get("track_enroll") or {}
+        self.te_enabled = bool(te.get("enabled", False))
+        self.te_topk = int(te.get("topk", 5))
+        self.te_min_frames = int(te.get("min_frames", 3))
+        self.te_max_wait = float(te.get("max_wait_seconds", 10.0))
         self.fq = FaceQuality(cfg)         # фильтр качества (Задача 1)
         self._scale = 1.0                  # коэффициент ресайза кадра (для размера в исходных px)
         self.tracks: list[_Track] = []
@@ -103,6 +121,15 @@ class CameraTracker:
             if ti not in matched_tracks:
                 t.misses += 1
                 if t.misses > self.max_misses:
+                    # track_enroll: трек умирает с достаточными доказательствами
+                    # (человек быстро прошёл кадр) — доводим создание ID до конца
+                    if self.te_enabled and t.label is None and \
+                            len(t.te_embs) >= self.te_min_frames:
+                        sc = t.te_last_score
+                        ident = self._te_commit(t, ts)
+                        if ident is not None:
+                            results.append(FaceResult(t.bbox, ident.label, sc,
+                                                      True, ident.crop_path))
                     continue
             survivors.append(t)
         self.tracks = survivors + new_tracks
@@ -152,6 +179,9 @@ class CameraTracker:
         # 3) Ниже порога. Можно ли это качественный кандидат в НОВЫЙ ID?
         good = self.g.quality_ok_for_new(float(getattr(f, "det_score", 0.0)), t.bbox, f.kps, frame)
         if score < self.g.new_id_threshold and good:
+            if self.te_enabled:
+                # track_enroll: копим доказательства, ID создаём отложенно из агрегата
+                return self._te_collect(t, f, emb, frame, ts, score, fr)
             t.candidate_frames += 1
             if t.candidate_frames >= self.confirm:
                 ident = self.g.add_new(emb, frame, f.bbox, ts)
@@ -164,3 +194,56 @@ class CameraTracker:
         if ident is not None and score >= self.g.new_id_threshold:
             return fr(ident.label, score, False, ident.crop_path)
         return None
+
+    # ------------------- track_enroll: отложенное создание ID -------------------
+    def _te_weight(self, f, frame) -> float:
+        """Вес кадра-доказательства: det × фронтальность × нормированная резкость."""
+        det = float(getattr(f, "det_score", 0.0))
+        fro = frontality(f.kps)
+        x1, y1, x2, y2 = [int(v) for v in f.bbox]
+        h, w = frame.shape[:2]
+        crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        b = blur_var(crop) if crop.size else 0.0
+        return det * max(fro, 1e-3) * min(b / 100.0, 1.0)
+
+    def _te_collect(self, t: _Track, f, emb, frame, ts, score, fr):
+        """Кандидат-кадр в буфер трека; при наборе topk кадров (или по таймауту) —
+        коммит: ID из взвешенного среднего эмбеддингов, фото — лучший кадр."""
+        w = self._te_weight(f, frame)
+        t.te_embs.append((w, np.array(emb, dtype=np.float32, copy=True)))
+        if t.te_first_ts == 0.0:
+            t.te_first_ts = ts
+        t.te_last_score = score
+        if w > t.te_best_w or t.te_best_crop is None:
+            crop = self.g._crop_face(frame, f.bbox)
+            if crop is not None:
+                t.te_best_w, t.te_best_crop, t.te_best_ts = w, crop, ts
+        if len(t.te_embs) >= self.te_topk or (ts - t.te_first_ts) >= self.te_max_wait:
+            ident = self._te_commit(t, ts)
+            if ident is not None:
+                return fr(ident.label, score, True, ident.crop_path)
+        return None  # копим доказательства — ничего не выдаём (не мигаем)
+
+    def _te_commit(self, t: _Track, ts):
+        """Создать ID из накопленных доказательств. None — доказательств мало."""
+        embs = t.te_embs
+        best_crop, best_ts = t.te_best_crop, t.te_best_ts
+        self._te_reset(t)
+        if len(embs) < self.te_min_frames or best_crop is None:
+            return None
+        top = sorted(embs, key=lambda x: x[0], reverse=True)[:self.te_topk]
+        agg = aggregate_embeddings([e for _, e in top], [w for w, _ in top])
+        if agg is None:
+            return None
+        ident = self.g.add_new_from_track(agg, best_crop, best_ts or ts)
+        t.label = ident.label
+        t.crop_path = ident.crop_path
+        return ident
+
+    @staticmethod
+    def _te_reset(t: _Track):
+        t.te_embs = []
+        t.te_best_w = 0.0
+        t.te_best_crop = None
+        t.te_best_ts = 0.0
+        t.te_first_ts = 0.0
