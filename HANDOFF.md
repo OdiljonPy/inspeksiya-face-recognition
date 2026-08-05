@@ -289,6 +289,17 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   и показывается под ID в таблице событий. Незнакомые -> person_XXXX как раньше.
   ВАЖНО при деплое: обновлять оба сервиса вместе — СТАРЫЙ gallery.py отбросит
   поля name/known/next_known_num при своём save (защитная загрузка meta).
+  **Enrollment расширен (06.08.2026):** POST /api/v1/known-faces принимает
+  `images_base64` (несколько ракурсов за раз; лучший по качеству
+  det×frontality×blur — снимок галереи, остальные — эмбеддинги; работает и с
+  label=). Обратная совместимость полная (image_base64 как раньше).
+  Секция `known_faces` в settings.yaml: `strict_enroll: false` (ПО УМОЛЧАНИЮ
+  ВЫКЛ — контракт внешней платформы не менялся); при true: гейт качества
+  каждого фото (min_face_px 112 / min_frontality 0.5 / min_blur 60 -> 422 с
+  причиной по каждому фото) + защита от дублей (лицо уже в галерее -> 409 с
+  duplicate-label и подсказкой). Тестировано TestClient на dev (7 сценариев;
+  для запуска тестов на dev нужен OPENBLAS_NUM_THREADS=1 — OpenBLAS в
+  тест-процессе падает по памяти, к проду отношения не имеет).
 - **Тип владельца ТС + сверка с налогом (18.07.2026)**: колонки vehicle_events:
   `owner_type` (shaxsiy | yuridik | kompaniya | NULL), `owner_inn`, `has_contract`
   (1|0|NULL=не проверялся/неприменимо). Базовый owner_type — по ФОРМАТУ тела номера

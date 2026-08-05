@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import load_settings, load_cameras, load_objects
-from gallery import Gallery
+from gallery import Gallery, frontality, blur_var
 
 cfg = load_settings()
 DB_PATH = cfg["paths"]["db"]
@@ -986,7 +986,8 @@ def _get_enroll_engine():
 
 class KnownFaceIn(BaseModel):
     full_name: str = ""                 # ФИО (обязательно при создании)
-    image_base64: str                   # фото (jpeg/png), base64 без data:-префикса
+    image_base64: str = ""              # фото (jpeg/png), base64 без data:-префикса
+    images_base64: list[str] = []       # НЕСКОЛЬКО фото (ракурсы) — лучший станет снимком
     object_index: str = ""              # индекс объекта во внешней системе
     label: str = ""                     # известный known_XXXX -> добавить ракурс, а не создать
 
@@ -1012,27 +1013,91 @@ def _decode_face(image_base64: str):
     return img, faces[0]
 
 
+def _photo_quality(img, face) -> dict:
+    """Метрики качества enrollment-фото (те же критерии, что у track_enroll)."""
+    x1, y1, x2, y2 = [int(v) for v in face.bbox]
+    h, w = img.shape[:2]
+    px = int(min(x2 - x1, y2 - y1))
+    crop = img[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+    b = float(blur_var(crop)) if crop.size else 0.0
+    fro = float(frontality(face.kps))
+    det = float(face.det_score)
+    return {"px": px, "blur": b, "frontality": fro, "det": det,
+            "weight": det * max(fro, 1e-3) * min(b / 100.0, 1.0)}
+
+
 @app.post("/api/v1/known-faces")
 def api_v1_known_face_add(request: Request, body: KnownFaceIn):
     """
     v1: завести известного человека по фото (или добавить ракурс с label=known_XXXX).
-    На фото — ровно одно лицо. Возвращает label/имя/снимок.
+    Фото: image_base64 (одно) и/или images_base64 (несколько ракурсов — лучший по
+    качеству станет снимком галереи, остальные добавятся эмбеддингами). На каждом
+    фото — ровно одно лицо. При known_faces.strict_enroll: каждое фото проходит
+    гейт качества (422 с причиной), создание дубля отклоняется 409 (duplicate_of).
     """
-    img, face = _decode_face(body.image_base64)
+    photos = [p for p in (body.images_base64 or []) if p]
+    if body.image_base64:
+        photos.insert(0, body.image_base64)
+    if not photos:
+        raise HTTPException(status_code=422,
+                            detail="нужно фото: image_base64 или images_base64")
+    kf = cfg.get("known_faces") or {}
+    strict = bool(kf.get("strict_enroll", False))
+
+    decoded, fails = [], []
+    for i, p in enumerate(photos, 1):
+        img, face = _decode_face(p)
+        q = _photo_quality(img, face)
+        if strict:
+            reasons = []
+            min_px = float(kf.get("min_face_px", 112))
+            min_fro = float(kf.get("min_frontality", 0.5))
+            min_blur = float(kf.get("min_blur", 60.0))
+            if q["px"] < min_px:
+                reasons.append(f"лицо мелкое ({q['px']}px < {min_px:g}px)")
+            if q["frontality"] < min_fro:
+                reasons.append(f"не анфас (frontality {q['frontality']:.2f} < {min_fro:g})")
+            if q["blur"] < min_blur:
+                reasons.append(f"размыто (blur {q['blur']:.0f} < {min_blur:g})")
+            if reasons:
+                fails.append(f"фото {i}: " + ", ".join(reasons))
+        decoded.append((img, face, q))
+    if fails:
+        raise HTTPException(status_code=422,
+                            detail="фото не прошли контроль качества: " + " | ".join(fails))
+    decoded.sort(key=lambda t: t[2]["weight"], reverse=True)   # лучший ракурс — первым
+
     g = Gallery(cfg)
-    if body.label:                      # ещё один ракурс существующему
-        ident = g.add_known_embedding(body.label, face.normed_embedding)
-        if ident is None:
-            raise HTTPException(status_code=404,
-                                detail=f"известный {body.label!r} не найден")
+    if body.label:                      # ещё ракурс(ы) существующему
+        ident = None
+        for img, face, q in decoded:
+            ident = g.add_known_embedding(body.label, face.normed_embedding)
+            if ident is None:
+                raise HTTPException(status_code=404,
+                                    detail=f"известный {body.label!r} не найден")
     else:
         name = body.full_name.strip()
         if not name:
             raise HTTPException(status_code=422, detail="full_name обязателен")
+        if strict:
+            # защита от дублей: лицо уже есть в галерее (known или авто-ID)
+            dup, score = g.identify(decoded[0][1].normed_embedding)
+            if dup is not None and score >= g.match_threshold:
+                who = f"{dup.label}" + (f" ({dup.name})" if dup.name else "")
+                hint = (f"добавить ракурс: label={dup.label}" if dup.known else
+                        f"человек уже накоплен авто-галереей как {dup.label} — "
+                        f"удалите его (DELETE /api/v1/persons/{dup.label}) или "
+                        f"отключите strict_enroll")
+                raise HTTPException(status_code=409,
+                                    detail=f"лицо уже в галерее: {who}, score={score:.2f}; {hint}")
+        img, face, q = decoded[0]
         ident = g.add_known(face.normed_embedding, img, face.bbox, name,
                             object_index=body.object_index)
+        for img2, face2, q2 in decoded[1:]:
+            g.add_known_embedding(ident.label, face2.normed_embedding)
     return {"label": ident.label, "full_name": ident.name,
             "object_index": ident.object_index, "n_emb": ident.n_emb,
+            "photos_accepted": len(decoded),
             "enrolled": ident.first_seen, "enrolled_dt": _iso(ident.first_seen),
             "face_url": _abs(request, _face_url(ident.crop_path))}
 
