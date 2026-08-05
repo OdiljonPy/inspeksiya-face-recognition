@@ -21,6 +21,16 @@ from results import FaceResult
 from face_quality import FaceQuality
 
 
+def _mean_pairwise_cosine(embs) -> float:
+    """Средний попарный cosine L2-норм. эмбеддингов (самосогласованность буфера)."""
+    m = np.asarray(embs, dtype=np.float32)
+    k = m.shape[0]
+    if k < 2:
+        return 1.0
+    s = m @ m.T
+    return float((s.sum() - np.trace(s)) / (k * (k - 1)))
+
+
 def _iou(a, b) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -70,6 +80,12 @@ class CameraTracker:
         self.te_topk = int(te.get("topk", 5))
         self.te_min_frames = int(te.get("min_frames", 3))
         self.te_max_wait = float(te.get("max_wait_seconds", 10.0))
+        # шаг 2: самосогласованность буфера — настоящее лицо даёт похожие
+        # эмбеддинги между кадрами, текстура/ложная детекция — случайные.
+        self.te_min_consistency = float(te.get("min_consistency", 0.35))
+        # шаг 3: кандидат подтверждается матчем ДРУГОГО трека не раньше чем через
+        # gap после создания (иначе дробление трека подтверждало бы мгновенно).
+        self.te_confirm_gap = float(te.get("confirm_min_gap_seconds", 300))
         self.fq = FaceQuality(cfg)         # фильтр качества (Задача 1)
         self._scale = 1.0                  # коэффициент ресайза кадра (для размера в исходных px)
         self.tracks: list[_Track] = []
@@ -173,6 +189,10 @@ class CameraTracker:
             # уверенное совпадение -> закрепляем существующий ID
             t.label = ident.label
             t.crop_path = ident.crop_path
+            # шаг 3: НОВЫЙ трек уверенно матчит кандидата спустя gap — подтверждаем
+            if self.te_enabled and getattr(ident, "provisional", False) and \
+                    (ts - ident.first_seen) >= self.te_confirm_gap:
+                self.g.confirm_identity(ident)
             self.g.maybe_add_embedding(ident, emb, score, ts)
             return fr(ident.label, score, False, ident.crop_path)
 
@@ -232,6 +252,12 @@ class CameraTracker:
         if len(embs) < self.te_min_frames or best_crop is None:
             return None
         top = sorted(embs, key=lambda x: x[0], reverse=True)[:self.te_topk]
+        # шаг 2: гейт самосогласованности — средний попарный cosine кадров буфера.
+        # Один человек за секунды с одной камеры проходит легко; текстура даёт
+        # каждый кадр «другое лицо» -> ID не создаётся вовсе (главный источник мусора).
+        if self.te_min_consistency > 0 and \
+                _mean_pairwise_cosine([e for _, e in top]) < self.te_min_consistency:
+            return None
         agg = aggregate_embeddings([e for _, e in top], [w for w, _ in top])
         if agg is None:
             return None

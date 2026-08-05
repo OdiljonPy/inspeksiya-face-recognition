@@ -26,7 +26,8 @@ class InferenceWorker(threading.Thread):
                  cam_modes=None, cam_det=None, cam_width=None, cam_roi=None,
                  anpr_engine=None, anpr_validator=None,
                  vehicle_log=None, plates_dir=None, on_plate=None,
-                 veh_full_dir=None, region_ocr=None, gai_checker=None):
+                 veh_full_dir=None, region_ocr=None, gai_checker=None,
+                 maintenance=None, maintenance_interval=21600.0):
         super().__init__(daemon=True, name="inference")
         self.q = frame_queue
         # пул движков лиц по det_size: {640: FaceEngine, 1280: FaceEngine, ...}
@@ -55,6 +56,12 @@ class InferenceWorker(threading.Thread):
         self.region_ocr = region_ocr           # второй OCR-проход региона (или None)
         self.gai_checker = gai_checker         # фоновая проверка по базе ГАИ (или None)
         self.on_plate = on_plate
+
+        # периодическое обслуживание В ЭТОМ ЖЕ потоке (галерея не рассчитана на
+        # конкурентный доступ внутри процесса) — напр. GC кандидатов (шаг 3)
+        self.maintenance = maintenance
+        self.maintenance_interval = float(maintenance_interval)
+        self._last_maintenance = time.time()
 
         self.trackers: dict[str, CameraTracker] = {}
         # отдельная статистика
@@ -92,6 +99,13 @@ class InferenceWorker(threading.Thread):
 
     def run(self):
         while not self.stop_event.is_set():
+            if self.maintenance and \
+                    time.time() - self._last_maintenance >= self.maintenance_interval:
+                self._last_maintenance = time.time()
+                try:
+                    self.maintenance()
+                except Exception as e:
+                    print(f"[maintenance] ошибка: {e}")
             try:
                 item: FrameItem = self.q.get(timeout=0.5)
             except queue.Empty:

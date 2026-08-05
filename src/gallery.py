@@ -42,6 +42,10 @@ class Identity:
     name: str = ""          # ФИО (только у known)
     known: bool = False     # True = заведён через API известных людей
     object_index: str = ""  # индекс объекта во внешней системе (откуда пришёл работник)
+    # --- track_enroll шаг 3: жизненный цикл ID ---
+    # True = «кандидат»: создан по треку, но ни один ДРУГОЙ трек его ещё не
+    # подтвердил. Неподтверждённые дольше TTL удаляются GC (мусор не копится).
+    provisional: bool = False
 
 
 class Gallery:
@@ -211,11 +215,25 @@ class Gallery:
 
         ident = Identity(idx=idx, label=label,
                          crop_path=os.path.relpath(crop_path, _project_root()),
-                         first_seen=ts, last_seen=ts, n_emb=0)
+                         first_seen=ts, last_seen=ts, n_emb=0,
+                         provisional=True)
         self.identities.append(ident)
         self._append_embedding(idx, agg_emb)
         self.save()
         return ident
+
+    def confirm_identity(self, ident: Identity):
+        """Шаг 3: кандидата подтвердил другой трек — больше не подлежит GC."""
+        if ident.provisional:
+            ident.provisional = False
+            self.save()
+
+    def stale_provisional(self, ttl_seconds: float, now: float | None = None) -> list[str]:
+        """Шаг 3: кандидаты, не подтверждённые дольше TTL, — на удаление (GC)."""
+        if now is None:
+            now = time.time()
+        return [i.label for i in self.identities
+                if i.provisional and not i.known and (now - i.last_seen) > ttl_seconds]
 
     def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, score: float, ts: float):
         """Добавить ещё один ракурс, если их мало и кадр достаточно «другой»."""

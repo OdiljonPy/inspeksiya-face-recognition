@@ -227,6 +227,23 @@ def main():
               f" gai_check={'on' if gai_checker else 'off'}"
               f" contract_check={'on' if gai_checker and gai_checker.facturas_url else 'off'}")
 
+    # GC неподтверждённых кандидатов (track_enroll шаг 3): выполняется В inference-
+    # потоке через maintenance-хук (галерея не рассчитана на второй поток в процессе).
+    maintenance = None
+    te_cfg = cfg["gallery"].get("track_enroll") or {}
+    ttl_days = float(te_cfg.get("provisional_ttl_days", 7))
+    if need_face and te_cfg.get("enabled") and ttl_days > 0:
+        ttl_s = ttl_days * 86400
+
+        def maintenance():
+            for lb in gallery.stale_provisional(ttl_s):
+                gallery.delete_identity(lb)
+                n = event_log.delete_person(lb)
+                print(f"[gc] кандидат {lb} не подтверждён за {ttl_days:g} дн. — "
+                      f"удалён (+{n} событий)")
+        print(f"  GC кандидатов: on (TTL {ttl_days:g} дн., "
+              f"каждые {float(te_cfg.get('gc_interval_hours', 6)):g} ч)")
+
     q = queue.Queue(maxsize=args.queue_size)
     stop_event = threading.Event()
 
@@ -240,6 +257,8 @@ def main():
         vehicle_log=vehicle_log, plates_dir=plates_dir,
         on_plate=make_plate_handler(args.quiet) if need_anpr else None,
         veh_full_dir=veh_full_dir, region_ocr=region_ocr, gai_checker=gai_checker,
+        maintenance=maintenance,
+        maintenance_interval=float(te_cfg.get("gc_interval_hours", 6)) * 3600,
     )
     stats_t = threading.Thread(target=stats_printer,
                                args=(workers, infer, q, gallery, vehicle_log, stop_event),

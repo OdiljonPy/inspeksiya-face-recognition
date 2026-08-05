@@ -101,6 +101,15 @@ class EventLog:
             self.conn.execute("UPDATE events SET crop_path=? WHERE id=?", (crop_path, rowid))
             self.conn.commit()
 
+    def delete_person(self, label: str) -> int:
+        """Удалить ВСЕ события человека (GC неподтверждённых кандидатов, track_enroll
+        шаг 3). Зеркалит DELETE /api/gallery/{label} дашборда: только строки events,
+        снимок галереи удаляет gallery.delete_identity."""
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM events WHERE person = ?", (label,))
+            self.conn.commit()
+            return cur.rowcount
+
     def close(self):
         with self.lock:
             self.conn.close()
