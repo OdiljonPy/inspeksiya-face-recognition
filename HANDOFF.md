@@ -306,6 +306,13 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   duplicate-label и подсказкой). Тестировано TestClient на dev (7 сценариев;
   для запуска тестов на dev нужен OPENBLAS_NUM_THREADS=1 — OpenBLAS в
   тест-процессе падает по памяти, к проду отношения не имеет).
+  **Тест на 100 РЕАЛЬНЫХ лицах (scripts/eval_lfw100.py, 06.08.2026):** LFW
+  multifaces с HF-зеркала (vilsonrodrigues/lfw); 100 человек заведено, 193
+  проверочных фото, 100 чужих. Итоги (buffalo_l, det 640, порог 0.5): rank-1
+  100% в обоих режимах; узнан с порогом — 94.8% (1 фото) vs **98.4% (3 фото)**
+  — мульти-фото режет промахи втрое; false accept 0/100 (score чужих max 0.30
+  — большой запас до 0.5); identify() ~0.05ms при 300 эмбеддингах. Гонять
+  после смены модели лиц/порогов.
 - **Тип владельца ТС + сверка с налогом (18.07.2026)**: колонки vehicle_events:
   `owner_type` (shaxsiy | yuridik | kompaniya | NULL), `owner_inn`, `has_contract`
   (1|0|NULL=не проверялся/неприменимо). Базовый owner_type — по ФОРМАТУ тела номера
