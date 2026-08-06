@@ -48,7 +48,7 @@ def _iou(a, b) -> float:
 class _Track:
     __slots__ = ("bbox", "label", "crop_path", "hits", "misses", "candidate_frames",
                  "te_embs", "te_best_w", "te_best_crop", "te_best_ts",
-                 "te_first_ts", "te_last_score")
+                 "te_first_ts", "te_last_score", "agg_embs")
 
     def __init__(self, bbox):
         self.bbox = bbox
@@ -64,6 +64,8 @@ class _Track:
         self.te_best_ts = 0.0
         self.te_first_ts = 0.0     # ts первого кандидат-кадра (для max_wait)
         self.te_last_score = 0.0   # последний FAISS-score (для события is_new)
+        # шаг 4: скользящий буфер ВСЕХ кадров трека для матчинга по агрегату
+        self.agg_embs = []         # [(вес, эмбеддинг)], последние match_agg_frames
 
 
 class CameraTracker:
@@ -86,6 +88,11 @@ class CameraTracker:
         # шаг 3: кандидат подтверждается матчем ДРУГОГО трека не раньше чем через
         # gap после создания (иначе дробление трека подтверждало бы мгновенно).
         self.te_confirm_gap = float(te.get("confirm_min_gap_seconds", 300))
+        # шаг 4: матчить неопознанный трек по СКОЛЬЗЯЩЕМУ АГРЕГАТУ его кадров,
+        # а не по одиночному эмбеддингу (score стабилизируется на мелких лицах).
+        # Отдельный под-флаг: включать ПОСЛЕ живой проверки шагов 1-3.
+        self.te_match_agg = bool(te.get("match_by_aggregate", False))
+        self.te_agg_frames = int(te.get("match_agg_frames", 5))
         self.fq = FaceQuality(cfg)         # фильтр качества (Задача 1)
         self._scale = 1.0                  # коэффициент ресайза кадра (для размера в исходных px)
         self.tracks: list[_Track] = []
@@ -182,8 +189,20 @@ class CameraTracker:
             # mode == "event": фиксируем как LOW_QUALITY (снимок пишется при логировании)
             return fr("LOW_QUALITY", 0.0, False, "")
 
-        # 2) Личность ещё не присвоена — ищем в галерее
-        ident, score = self.g.identify(emb)
+        # 2) Личность ещё не присвоена — ищем в галерее.
+        # Шаг 4 (под-флаг): ищем по скользящему агрегату кадров трека — одиночный
+        # эмбеддинг на мелком лице шумит (0.19..0.86 у одного человека), среднее
+        # last-K кадров стабильнее. Плохие кадры входят с малым весом.
+        if self.te_enabled and self.te_match_agg:
+            t.agg_embs.append((self._te_weight(f, frame),
+                               np.array(emb, dtype=np.float32, copy=True)))
+            if len(t.agg_embs) > self.te_agg_frames:
+                t.agg_embs.pop(0)
+            agg = aggregate_embeddings([e for _, e in t.agg_embs],
+                                       [w for w, _ in t.agg_embs])
+            ident, score = self.g.identify(agg if agg is not None else emb)
+        else:
+            ident, score = self.g.identify(emb)
 
         if ident is not None and score >= self.g.match_threshold:
             # уверенное совпадение -> закрепляем существующий ID
