@@ -180,6 +180,9 @@ class CameraTracker:
                 ident, score = self.g.identify(emb)
                 if frontality(f.kps) >= self.g.min_frontality:
                     self.g.maybe_add_embedding(own, emb, score, ts)
+                    # best-shot: чёткий фронтальный кадр заменяет фото галереи
+                    self.g.maybe_update_photo(own, frame, f.bbox,
+                                              self._te_weight(f, frame))
                 return fr(t.label, score, False, t.crop_path)
 
         # ★ ФИЛЬТР КАЧЕСТВА — перед FAISS, только для НЕопознанных лиц (если включён) ★
@@ -213,6 +216,10 @@ class CameraTracker:
                     (ts - ident.first_seen) >= self.te_confirm_gap:
                 self.g.confirm_identity(ident)
             self.g.maybe_add_embedding(ident, emb, score, ts)
+            if frontality(f.kps) >= self.g.min_frontality:
+                # best-shot: чёткий фронтальный кадр заменяет фото галереи
+                self.g.maybe_update_photo(ident, frame, f.bbox,
+                                          self._te_weight(f, frame))
             return fr(ident.label, score, False, ident.crop_path)
 
         # 3) Ниже порога. Можно ли это качественный кандидат в НОВЫЙ ID?
@@ -223,7 +230,8 @@ class CameraTracker:
                 return self._te_collect(t, f, emb, frame, ts, score, fr)
             t.candidate_frames += 1
             if t.candidate_frames >= self.confirm:
-                ident = self.g.add_new(emb, frame, f.bbox, ts)
+                ident = self.g.add_new(emb, frame, f.bbox, ts,
+                                       photo_q=self._te_weight(f, frame))
                 t.label = ident.label
                 t.crop_path = ident.crop_path
                 return fr(ident.label, score, True, ident.crop_path)
@@ -243,7 +251,7 @@ class CameraTracker:
         h, w = frame.shape[:2]
         crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
         b = blur_var(crop) if crop.size else 0.0
-        return det * max(fro, 1e-3) * min(b / 100.0, 1.0)
+        return float(det * max(fro, 1e-3) * min(b / 100.0, 1.0))
 
     def _te_collect(self, t: _Track, f, emb, frame, ts, score, fr):
         """Кандидат-кадр в буфер трека; при наборе topk кадров (или по таймауту) —
@@ -266,7 +274,7 @@ class CameraTracker:
     def _te_commit(self, t: _Track, ts):
         """Создать ID из накопленных доказательств. None — доказательств мало."""
         embs = t.te_embs
-        best_crop, best_ts = t.te_best_crop, t.te_best_ts
+        best_crop, best_ts, best_w = t.te_best_crop, t.te_best_ts, t.te_best_w
         self._te_reset(t)
         if len(embs) < self.te_min_frames or best_crop is None:
             return None
@@ -280,7 +288,8 @@ class CameraTracker:
         agg = aggregate_embeddings([e for _, e in top], [w for w, _ in top])
         if agg is None:
             return None
-        ident = self.g.add_new_from_track(agg, best_crop, best_ts or ts)
+        ident = self.g.add_new_from_track(agg, best_crop, best_ts or ts,
+                                          photo_q=best_w)
         t.label = ident.label
         t.crop_path = ident.crop_path
         return ident

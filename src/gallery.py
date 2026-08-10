@@ -46,6 +46,9 @@ class Identity:
     # True = «кандидат»: создан по треку, но ни один ДРУГОЙ трек его ещё не
     # подтвердил. Неподтверждённые дольше TTL удаляются GC (мусор не копится).
     provisional: bool = False
+    # Качество текущего фото галереи (det × frontality × норм. blur) —
+    # для best-shot: более чёткий кадр заменяет фото (см. maybe_update_photo).
+    photo_q: float = 0.0
 
 
 class Gallery:
@@ -178,7 +181,8 @@ class Gallery:
         self.index.add(row)
         self.identities[owner_idx].n_emb += 1
 
-    def add_new(self, normed_emb, frame, bbox, ts: float) -> Identity:
+    def add_new(self, normed_emb, frame, bbox, ts: float,
+                photo_q: float = 0.0) -> Identity:
         """Создать нового человека: ID + снимок (один раз) + первый эмбеддинг."""
         idx = len(self.identities)
         label = f"person_{self._next_num:04d}"
@@ -188,17 +192,19 @@ class Gallery:
         crop_path = os.path.join(self.faces_dir, f"{label}.jpg")
         if crop is not None:
             cv2.imwrite(crop_path, _enhance_gallery_crop(crop),
-                        [cv2.IMWRITE_JPEG_QUALITY, 97])
+                        [cv2.IMWRITE_JPEG_QUALITY, 100])
 
         ident = Identity(idx=idx, label=label,
                          crop_path=os.path.relpath(crop_path, _project_root()),
-                         first_seen=ts, last_seen=ts, n_emb=0)
+                         first_seen=ts, last_seen=ts, n_emb=0,
+                         photo_q=float(photo_q))
         self.identities.append(ident)
         self._append_embedding(idx, normed_emb)
         self.save()
         return ident
 
-    def add_new_from_track(self, agg_emb: np.ndarray, crop_bgr, ts: float) -> Identity:
+    def add_new_from_track(self, agg_emb: np.ndarray, crop_bgr, ts: float,
+                           photo_q: float = 0.0) -> Identity:
         """
         Создать нового человека из ДОКАЗАТЕЛЬСТВ трека (track_enroll):
         эмбеддинг — агрегат (взвешенное среднее) лучших кадров трека,
@@ -211,16 +217,36 @@ class Gallery:
         crop_path = os.path.join(self.faces_dir, f"{label}.jpg")
         if crop_bgr is not None and getattr(crop_bgr, "size", 0):
             cv2.imwrite(crop_path, _enhance_gallery_crop(crop_bgr),
-                        [cv2.IMWRITE_JPEG_QUALITY, 97])
+                        [cv2.IMWRITE_JPEG_QUALITY, 100])
 
         ident = Identity(idx=idx, label=label,
                          crop_path=os.path.relpath(crop_path, _project_root()),
                          first_seen=ts, last_seen=ts, n_emb=0,
-                         provisional=True)
+                         provisional=True, photo_q=float(photo_q))
         self.identities.append(ident)
         self._append_embedding(idx, agg_emb)
         self.save()
         return ident
+
+    def maybe_update_photo(self, ident: Identity, frame, bbox, q: float,
+                           min_ratio: float = 1.25):
+        """
+        Best-shot: заменить фото галереи, если текущий кадр ЗАМЕТНО чётче
+        сохранённого (q > photo_q * min_ratio). Гистерезис min_ratio защищает
+        от постоянных перезаписей. known не трогаем — у них портрет с API.
+        Дашборд подхватит новое фото сам (cache-busting ?v=mtime).
+        """
+        if ident.known or q <= 0 or q < ident.photo_q * min_ratio:
+            return
+        crop = self._crop_face(frame, bbox)
+        if crop is None:
+            return
+        abs_path = ident.crop_path if os.path.isabs(ident.crop_path) else \
+            os.path.join(_project_root(), ident.crop_path)
+        cv2.imwrite(abs_path, _enhance_gallery_crop(crop),
+                    [cv2.IMWRITE_JPEG_QUALITY, 100])
+        ident.photo_q = float(q)
+        self.save()
 
     def confirm_identity(self, ident: Identity):
         """Шаг 3: кандидата подтвердил другой трек — больше не подлежит GC."""
@@ -263,7 +289,7 @@ class Gallery:
             crop_path = os.path.join(self.faces_dir, f"{label}.jpg")
             if crop is not None:
                 cv2.imwrite(crop_path, _enhance_gallery_crop(crop),
-                            [cv2.IMWRITE_JPEG_QUALITY, 97])
+                            [cv2.IMWRITE_JPEG_QUALITY, 100])
 
             ident = Identity(idx=idx, label=label,
                              crop_path=os.path.relpath(crop_path, _project_root()),
