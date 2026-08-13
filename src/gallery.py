@@ -163,6 +163,33 @@ class Gallery:
             return None, 0.0
         return self.identities[int(self.owners[row])], score
 
+    def identify2(self, normed_emb: np.ndarray):
+        """
+        Margin-check: (Identity|None, score, margin), где margin — отрыв топ-1
+        от ближайшего ДРУГОГО человека (не другого ракурса того же). Малый
+        отрыв = два человека в базе почти одинаково похожи на кадр — матч
+        ненадёжен (см. gallery.match_min_margin).
+        """
+        if self.index.ntotal == 0:
+            return None, 0.0, 1.0
+        q = np.ascontiguousarray(normed_emb.reshape(1, -1), dtype=np.float32)
+        k = min(16, self.index.ntotal)
+        D, I = self.index.search(q, k)
+        row = int(I[0, 0])
+        if row < 0:
+            return None, 0.0, 1.0
+        best_owner = int(self.owners[row])
+        best = float(D[0, 0])
+        margin = 1.0
+        for j in range(1, k):
+            r = int(I[0, j])
+            if r < 0:
+                break
+            if int(self.owners[r]) != best_owner:
+                margin = best - float(D[0, j])
+                break
+        return self.identities[best_owner], best, margin
+
     def _crop_face(self, frame, bbox):
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in bbox]
@@ -441,6 +468,39 @@ def frontality(kps) -> float:
             return 0.0
         ratio = (nose_x - le_x) / span          # ~0.5 у анфаса
         return max(0.0, 1.0 - 2.0 * abs(ratio - 0.5))
+    except Exception:
+        return 1.0                              # не смогли оценить — не мешаем
+
+
+def pose_score(kps) -> float:
+    """
+    Полная оценка позы [0..1] по 5 точкам SCRFD: yaw (влево/вправо, как
+    frontality) × pitch (вверх/вниз: нос по вертикали между глазами и ртом)
+    × roll (наклон линии глаз). 1 = ровный анфас. Используется для КАЧЕСТВА
+    ФОТО (best-shot, вес кадра) — не для порогов распознавания.
+    """
+    try:
+        import numpy as _np
+        k = _np.asarray(kps, dtype=_np.float32)
+        le, re, nose, lm, rm = k[0], k[1], k[2], k[3], k[4]
+        # yaw — как frontality()
+        span = re[0] - le[0]
+        if abs(span) < 1e-3:
+            return 0.0
+        f_yaw = max(0.0, 1.0 - 2.0 * abs((nose[0] - le[0]) / span - 0.5))
+        # roll — наклон линии глаз (20° штрафуется, 45° = 0)
+        import math
+        roll_deg = abs(math.degrees(math.atan2(float(re[1] - le[1]), float(span))))
+        f_roll = max(0.0, 1.0 - roll_deg / 45.0)
+        # pitch — нос по вертикали между линией глаз и линией рта (~0.5 у анфаса;
+        # к глазам = голова вверх, ко рту = вниз)
+        eye_y, mouth_y = (le[1] + re[1]) / 2.0, (lm[1] + rm[1]) / 2.0
+        if mouth_y - eye_y < 1e-3:
+            f_pitch = 0.0
+        else:
+            r = (nose[1] - eye_y) / (mouth_y - eye_y)
+            f_pitch = max(0.0, 1.0 - 2.0 * abs(float(r) - 0.5))
+        return float(f_yaw * f_roll * f_pitch)
     except Exception:
         return 1.0                              # не смогли оценить — не мешаем
 

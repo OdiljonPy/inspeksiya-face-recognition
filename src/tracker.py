@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gallery import Gallery, frontality, blur_var, aggregate_embeddings
+from gallery import Gallery, frontality, blur_var, aggregate_embeddings, pose_score
 from results import FaceResult
 from face_quality import FaceQuality
 
@@ -93,6 +93,9 @@ class CameraTracker:
         # Отдельный под-флаг: включать ПОСЛЕ живой проверки шагов 1-3.
         self.te_match_agg = bool(te.get("match_by_aggregate", False))
         self.te_agg_frames = int(te.get("match_agg_frames", 5))
+        # margin-check: не биндить матч, если отрыв топ-1 от ближайшего ДРУГОГО
+        # человека меньше порога (два кандидата неразличимы). 0 = выключено.
+        self.match_min_margin = float(gg.get("match_min_margin", 0.0))
         self.fq = FaceQuality(cfg)         # фильтр качества (Задача 1)
         self._scale = 1.0                  # коэффициент ресайза кадра (для размера в исходных px)
         self.tracks: list[_Track] = []
@@ -203,11 +206,18 @@ class CameraTracker:
                 t.agg_embs.pop(0)
             agg = aggregate_embeddings([e for _, e in t.agg_embs],
                                        [w for w, _ in t.agg_embs])
-            ident, score = self.g.identify(agg if agg is not None else emb)
+            q_emb = agg if agg is not None else emb
         else:
-            ident, score = self.g.identify(emb)
+            q_emb = emb
+        if self.match_min_margin > 0:
+            ident, score, margin = self.g.identify2(q_emb)
+            # неразличимые кандидаты: матч не биндим — уйдёт в серую зону ниже
+            margin_ok = margin >= self.match_min_margin
+        else:
+            ident, score = self.g.identify(q_emb)
+            margin_ok = True
 
-        if ident is not None and score >= self.g.match_threshold:
+        if ident is not None and score >= self.g.match_threshold and margin_ok:
             # уверенное совпадение -> закрепляем существующий ID
             t.label = ident.label
             t.crop_path = ident.crop_path
@@ -244,9 +254,11 @@ class CameraTracker:
 
     # ------------------- track_enroll: отложенное создание ID -------------------
     def _te_weight(self, f, frame) -> float:
-        """Вес кадра-доказательства: det × фронтальность × нормированная резкость."""
+        """Вес кадра-доказательства: det × ПОЗА (yaw+pitch+roll) × норм. резкость.
+        Поза вместо чистого yaw — чтобы фото не фиксировалось на «смотрит
+        вниз/вверх/набок» (влияет на выбор фото, не на пороги распознавания)."""
         det = float(getattr(f, "det_score", 0.0))
-        fro = frontality(f.kps)
+        fro = pose_score(f.kps)
         x1, y1, x2, y2 = [int(v) for v in f.bbox]
         h, w = frame.shape[:2]
         crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
