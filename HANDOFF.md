@@ -363,6 +363,10 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   attendance, known-faces GET/POST; delete_identity удаляет и ракурсы.
   3) **Полный кадр события лица — ТОЛЬКО для is_new** (первое появление
   человека); раньше писался на каждое событие и съедал диск. ANPR не тронут.
+  При track_enroll событие is_new несёт ЛУЧШИЙ полный кадр трека
+  (FaceResult.full_frame, трек хранит te_best_full) — иначе death-commit
+  (человек быстро ушёл) сохранял бы кадр УЖЕ БЕЗ человека. Проверено
+  синтетическим тестом обоих путей коммита.
   4) Доки: docs/API_INTEGRATION.md (RU, дополнен) + docs/API_INTEGRATION_EN.md
   (EN, полный справочник v1 для интеграторов).
 - **Тип владельца ТС + сверка с налогом (18.07.2026)**: колонки vehicle_events:

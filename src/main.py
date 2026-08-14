@@ -32,11 +32,11 @@ from anpr.plate_format import PlateValidator
 from anpr.vehicle_log import VehicleLog
 
 
-def _save_full_frame(frame, cam_id, ts, full_dir) -> str:
+def _save_full_frame(frame, cam_id, ts, full_dir, suffix: str = "") -> str:
     """Сохранить полный кадр события (общий вид). Один файл на кадр."""
     import os
     os.makedirs(full_dir, exist_ok=True)
-    name = f"{int(ts*1000)}_{cam_id}.jpg"
+    name = f"{int(ts*1000)}_{cam_id}{suffix}.jpg"
     path = os.path.join(full_dir, name)
     # 95: кадр уже сжат камерой, повторный JPEG-85 добавлял артефакты на архивные фото
     cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -79,14 +79,21 @@ def make_face_handler(event_log: EventLog, full_dir: str, lowq_dir: str, quiet: 
             if f.is_new or rowid is not None or not quiet:
                 lines.append(f"{f.label}:{f.score:.2f}[{tag}]")
         # Полный кадр — ТОЛЬКО при ПЕРВОМ появлении человека (is_new, 06.08.2026):
-        # раньше писался на каждое событие и съедал диск. Кроп LOW_QUALITY — как раньше.
+        # раньше писался на каждое событие и съедал диск. track_enroll кладёт в
+        # событие ЛУЧШИЙ кадр трека (f.full_frame) — человек на нём точно виден,
+        # даже если ID закоммичен после ухода из кадра. Кроп LOW_QUALITY — как раньше.
         if logged and r.frame is not None:
-            full_path = ""
-            if any(f.is_new for _, f in logged):
-                full_path = _save_full_frame(r.frame, r.cam_id, ts, full_dir)
+            shared_path = ""
             for rid, f in logged:
-                if full_path and f.is_new:
-                    event_log.set_full(rid, full_path)
+                if f.is_new:
+                    best = getattr(f, "full_frame", None)
+                    if best is not None:
+                        event_log.set_full(rid, _save_full_frame(
+                            best, r.cam_id, ts, full_dir, suffix=f"_{rid}"))
+                    else:
+                        if not shared_path:
+                            shared_path = _save_full_frame(r.frame, r.cam_id, ts, full_dir)
+                        event_log.set_full(rid, shared_path)
                 if f.label == "LOW_QUALITY":     # у него crop пустой — пишем кроп лица
                     cp = _save_face_crop(r.frame, f.bbox, r.cam_id, ts, lowq_dir)
                     if cp:

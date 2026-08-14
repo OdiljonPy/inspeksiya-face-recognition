@@ -17,6 +17,9 @@ class FaceResult:
     q_yaw: float = None
     # «серая зона» матчинга: ID присвоен по ближайшему, но уверенности мало
     uncertain: bool = False
+    # track_enroll: ЛУЧШИЙ полный кадр трека для события первого появления
+    # (is_new). None -> использовать текущий кадр (старое поведение).
+    full_frame: object = None
 
 
 @dataclass

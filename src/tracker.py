@@ -48,7 +48,7 @@ def _iou(a, b) -> float:
 class _Track:
     __slots__ = ("bbox", "label", "crop_path", "hits", "misses", "candidate_frames",
                  "te_embs", "te_best_w", "te_best_crop", "te_best_ts",
-                 "te_first_ts", "te_last_score", "agg_embs")
+                 "te_best_full", "te_first_ts", "te_last_score", "agg_embs")
 
     def __init__(self, bbox):
         self.bbox = bbox
@@ -61,6 +61,7 @@ class _Track:
         self.te_embs = []          # [(вес качества, эмбеддинг)] кандидат-кадров
         self.te_best_w = 0.0       # лучший вес — его кадр станет фото галереи
         self.te_best_crop = None   # кроп лица лучшего кадра (с полями)
+        self.te_best_full = None   # ЛУЧШИЙ полный кадр (для события is_new)
         self.te_best_ts = 0.0
         self.te_first_ts = 0.0     # ts первого кандидат-кадра (для max_wait)
         self.te_last_score = 0.0   # последний FAISS-score (для события is_new)
@@ -152,10 +153,14 @@ class CameraTracker:
                     if self.te_enabled and t.label is None and \
                             len(t.te_embs) >= self.te_min_frames:
                         sc = t.te_last_score
+                        best_full = t.te_best_full
                         ident = self._te_commit(t, ts)
                         if ident is not None:
+                            # человек уже ушёл из кадра — полное фото события
+                            # берём из ЛУЧШЕГО кадра трека, а не текущего
                             results.append(FaceResult(t.bbox, ident.label, sc,
-                                                      True, ident.crop_path))
+                                                      True, ident.crop_path,
+                                                      full_frame=best_full))
                     continue
             survivors.append(t)
         self.tracks = survivors + new_tracks
@@ -279,10 +284,14 @@ class CameraTracker:
             crop = self.g._crop_face(frame, f.bbox)
             if crop is not None:
                 t.te_best_w, t.te_best_crop, t.te_best_ts = w, crop, ts
+                t.te_best_full = frame     # ссылка: кадры после инференса не мутируются
         if len(t.te_embs) >= self.te_topk or (ts - t.te_first_ts) >= self.te_max_wait:
+            best_full = t.te_best_full
             ident = self._te_commit(t, ts)
             if ident is not None:
-                return fr(ident.label, score, True, ident.crop_path)
+                res = fr(ident.label, score, True, ident.crop_path)
+                res.full_frame = best_full  # полный кадр, где человек точно виден
+                return res
         return None  # копим доказательства — ничего не выдаём (не мигаем)
 
     def _te_commit(self, t: _Track, ts):
@@ -313,5 +322,6 @@ class CameraTracker:
         t.te_embs = []
         t.te_best_w = 0.0
         t.te_best_crop = None
+        t.te_best_full = None
         t.te_best_ts = 0.0
         t.te_first_ts = 0.0
