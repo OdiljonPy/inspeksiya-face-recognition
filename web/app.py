@@ -572,7 +572,21 @@ def api_person(label: str, period: str = Query("month")):
                 for r in conn.execute(
                     "SELECT ts, camera_id, zone, object_id, crop_path, full_path FROM events "
                     "WHERE person=? ORDER BY ts DESC LIMIT 12", (label,))]
+        # ПЕРВОЕ появление с полным кадром (is_new; у старых БД — просто самое
+        # раннее событие, у которого есть full_path)
+        first = None
+        r = conn.execute(
+            "SELECT ts, camera_id, zone, object_id, full_path FROM events "
+            "WHERE person=? AND full_path IS NOT NULL AND full_path != '' "
+            "ORDER BY ts ASC LIMIT 1", (label,)).fetchone()
+        if r:
+            first = {"ts": r["ts"], "datetime": _iso(r["ts"]),
+                     "camera_id": r["camera_id"], "zone": r["zone"],
+                     "object_id": r["object_id"],
+                     "object_name": names.get(r["object_id"], r["object_id"]),
+                     "full_url": _full_url(r["full_path"])}
     return {"label": label, "period": period, "face_url": face_url, "total": total,
+            "first": first, "angles": _angle_rel_urls(label),
             "by_object": by_object, "by_day": by_day, "last": last}
 
 
@@ -656,15 +670,19 @@ def _gallery_face_urls() -> dict:
     return out
 
 
-def _angle_urls(request: Request, label: str) -> list:
-    """Абсолютные URL фото РАКУРСОВ человека (faces/<label>_r*.jpg), по порядку."""
+def _angle_rel_urls(label: str) -> list:
+    """Относительные URL фото РАКУРСОВ человека (faces/<label>_r*.jpg), по порядку."""
     try:
         names = sorted(n for n in os.listdir(FACES_DIR)
                        if n.startswith(f"{label}_r") and n.endswith(".jpg"))
     except OSError:
         return []
-    return [_abs(request, _versioned("/faces", FACES_DIR, os.path.join(FACES_DIR, n)))
-            for n in names]
+    return [_versioned("/faces", FACES_DIR, os.path.join(FACES_DIR, n)) for n in names]
+
+
+def _angle_urls(request: Request, label: str) -> list:
+    """Абсолютные URL фото ракурсов (для v1-API)."""
+    return [_abs(request, u) for u in _angle_rel_urls(label)]
 
 
 @app.get("/api/v1/faces")

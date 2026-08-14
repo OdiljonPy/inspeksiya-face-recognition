@@ -369,6 +369,10 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   синтетическим тестом обоих путей коммита.
   4) Доки: docs/API_INTEGRATION.md (RU, дополнен) + docs/API_INTEGRATION_EN.md
   (EN, полный справочник v1 для интеграторов).
+  5) **Карточка человека в дашборде**: блок «Первое появление (общий кадр с
+  камеры)» — самое раннее событие с full_path (клик = полный размер) + полоса
+  фото ракурсов; /api/person/{label} отдаёт first{...full_url} и angles[].
+  Проверено в браузере на dev-БД.
 - **Тип владельца ТС + сверка с налогом (18.07.2026)**: колонки vehicle_events:
   `owner_type` (shaxsiy | yuridik | kompaniya | NULL), `owner_inn`, `has_contract`
   (1|0|NULL=не проверялся/неприменимо). Базовый owner_type — по ФОРМАТУ тела номера

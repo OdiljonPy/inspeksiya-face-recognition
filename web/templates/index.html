@@ -213,7 +213,15 @@
       <div>
         <div class="id" id="personName" style="font-size:20px"></div>
         <div class="muted" id="personTotal" style="margin-top:6px"></div>
+        <div id="personAngles" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
       </div>
+    </div>
+    <div id="personFirstBlock" class="hidden">
+      <h3 style="margin:16px 0 6px">Первое появление (общий кадр с камеры)</h3>
+      <a id="personFirstLink" target="_blank">
+        <img id="personFirstImg" style="max-width:640px;width:100%;border-radius:8px">
+      </a>
+      <div class="muted" id="personFirstInfo" style="font-size:13px;margin-top:4px"></div>
     </div>
     <h3 style="margin:16px 0 6px">Появления по дням</h3>
     <div id="personChart" style="overflow-x:auto"></div>
@@ -284,6 +292,18 @@ async function openPerson(label) {
   document.getElementById("personName").textContent = d.label;
   document.getElementById("personFace").src = d.face_url || "";
   document.getElementById("personTotal").textContent = `Всего появлений за месяц: ${d.total}`;
+  document.getElementById("personAngles").innerHTML = (d.angles||[]).map(u =>
+    `<a href="${u}" target="_blank"><img class="thumb" style="width:56px;height:56px" src="${u}" title="ракурс"></a>`).join("");
+  const fb = document.getElementById("personFirstBlock");
+  if (d.first && d.first.full_url) {
+    fb.classList.remove("hidden");
+    document.getElementById("personFirstImg").src = d.first.full_url;
+    document.getElementById("personFirstLink").href = d.first.full_url;
+    document.getElementById("personFirstInfo").textContent =
+      `${d.first.object_name} · ${d.first.camera_id} (${d.first.zone||""}) · ${d.first.datetime}`;
+  } else {
+    fb.classList.add("hidden");
+  }
   document.getElementById("personObjects").innerHTML = (d.by_object||[]).map(o =>
     `<tr><td>${o.object_name}</td><td>${o.count}</td></tr>`).join("")
     || `<tr><td colspan="2" class="muted">—</td></tr>`;
