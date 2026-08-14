@@ -344,6 +344,54 @@ label и подсказка (добавить ракурс через `label=` /
 { "label": "known_0001", "image_base64": "<ещё одно фото>" }
 ```
 
+### Посещаемость по дням (API 1б)
+
+```
+GET /api/v1/attendance[?object_id=...|object_index=...][&date_from=...&date_to=...][&include_people=0]
+```
+
+На каждую дату — сколько УНИКАЛЬНЫХ людей было на объекте + список этих людей
+с фото из галереи и фото ракурсов. Без `date_from` — последние 7 дней.
+`include_people=0` — только счётчики, без списков. Unknown/LOW_QUALITY в
+`people` не входят — считаются отдельно (`unknown_events`).
+
+```json
+{
+  "object_id": "obj_avloniy", "object_index": "41109", "total_days": 2,
+  "items": [
+    {
+      "date": "2026-08-05", "people": 14, "unknown_events": 3,
+      "persons": [
+        {
+          "person": "known_0002", "person_name": "ALIYEV VALI",
+          "events": 9,
+          "first_seen": 1786259012.5, "first_seen_dt": "2026-08-05 08:03:32",
+          "last_seen": 1786291612.5, "last_seen_dt": "2026-08-05 17:06:52",
+          "face_url": "http://<host>/faces/known_0002.jpg?v=...",
+          "angle_urls": ["http://<host>/faces/known_0002_r2.jpg?v=..."]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Фото ракурсов (angle_urls)
+
+Когда система дописывает человеку дополнительный ракурс (эмбеддинг), теперь
+сохраняется и его ФОТО: `faces/<label>_r<N>.jpg` (JPEG 100). Поле `angle_urls`
+(список абсолютных URL, по порядку) добавлено в: `/api/v1/persons` (items),
+`/api/v1/attendance` (persons), `GET /api/v1/known-faces` (items) и в ответ
+`POST /api/v1/known-faces`. Основное фото (`face_url`) — по-прежнему лучший
+кадр (best-shot). При удалении человека фото ракурсов удаляются вместе с ним.
+
+### Полные кадры событий
+
+Полный кадр камеры (`full_url` в `/api/v1/faces`) сохраняется ТОЛЬКО для
+события ПЕРВОГО появления человека (`is_new=true`). У остальных событий лиц
+`full_url` пуст — экономия диска (раньше полный кадр писался на каждое событие).
+Для транспорта (`/api/v1/vehicles`) поведение не менялось.
+
 ### Список работников + статистика появлений
 
 ```

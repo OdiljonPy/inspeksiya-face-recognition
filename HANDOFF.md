@@ -353,6 +353,18 @@ requirements.txt (dev, sm_120), requirements-linux.txt (сервер, T4), READM
   — мульти-фото режет промахи втрое; false accept 0/100 (score чужих max 0.30
   — большой запас до 0.5); identify() ~0.05ms при 300 эмбеддингах. Гонять
   после смены модели лиц/порогов.
+- **Посещаемость + фото ракурсов + экономия диска (06.08.2026, по запросу)**:
+  1) `GET /api/v1/attendance` — по дням: сколько уникальных людей на объекте
+  + список людей с фото и ракурсами (include_people=0 — только счётчики;
+  дефолт — последние 7 дней; Unknown/LOW_QUALITY отдельно в unknown_events).
+  2) **Фото ракурсов**: при дописывании эмбеддинга-ракурса сохраняется и его
+  фото faces/<label>_r<N>.jpg (JPEG 100) — и с камеры (maybe_add_embedding с
+  frame/bbox), и через known-faces API; angle_urls добавлен в v1/persons,
+  attendance, known-faces GET/POST; delete_identity удаляет и ракурсы.
+  3) **Полный кадр события лица — ТОЛЬКО для is_new** (первое появление
+  человека); раньше писался на каждое событие и съедал диск. ANPR не тронут.
+  4) Доки: docs/API_INTEGRATION.md (RU, дополнен) + docs/API_INTEGRATION_EN.md
+  (EN, полный справочник v1 для интеграторов).
 - **Тип владельца ТС + сверка с налогом (18.07.2026)**: колонки vehicle_events:
   `owner_type` (shaxsiy | yuridik | kompaniya | NULL), `owner_inn`, `has_contract`
   (1|0|NULL=не проверялся/неприменимо). Базовый owner_type — по ФОРМАТУ тела номера

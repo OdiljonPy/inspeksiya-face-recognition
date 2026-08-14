@@ -182,7 +182,8 @@ class CameraTracker:
             else:
                 ident, score = self.g.identify(emb)
                 if frontality(f.kps) >= self.g.min_frontality:
-                    self.g.maybe_add_embedding(own, emb, score, ts)
+                    self.g.maybe_add_embedding(own, emb, score, ts,
+                                               frame=frame, bbox=f.bbox)
                     # best-shot: чёткий фронтальный кадр заменяет фото галереи
                     self.g.maybe_update_photo(own, frame, f.bbox,
                                               self._te_weight(f, frame))
@@ -225,7 +226,8 @@ class CameraTracker:
             if self.te_enabled and getattr(ident, "provisional", False) and \
                     (ts - ident.first_seen) >= self.te_confirm_gap:
                 self.g.confirm_identity(ident)
-            self.g.maybe_add_embedding(ident, emb, score, ts)
+            self.g.maybe_add_embedding(ident, emb, score, ts,
+                                       frame=frame, bbox=f.bbox)
             if frontality(f.kps) >= self.g.min_frontality:
                 # best-shot: чёткий фронтальный кадр заменяет фото галереи
                 self.g.maybe_update_photo(ident, frame, f.bbox,

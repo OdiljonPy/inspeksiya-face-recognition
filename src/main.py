@@ -78,11 +78,15 @@ def make_face_handler(event_log: EventLog, full_dir: str, lowq_dir: str, quiet: 
                     ("LOG" if rowid is not None else "...")))
             if f.is_new or rowid is not None or not quiet:
                 lines.append(f"{f.label}:{f.score:.2f}[{tag}]")
-        # снимки сохраняем ОДИН раз на кадр и только для залогированных событий
+        # Полный кадр — ТОЛЬКО при ПЕРВОМ появлении человека (is_new, 06.08.2026):
+        # раньше писался на каждое событие и съедал диск. Кроп LOW_QUALITY — как раньше.
         if logged and r.frame is not None:
-            full_path = _save_full_frame(r.frame, r.cam_id, ts, full_dir)
+            full_path = ""
+            if any(f.is_new for _, f in logged):
+                full_path = _save_full_frame(r.frame, r.cam_id, ts, full_dir)
             for rid, f in logged:
-                event_log.set_full(rid, full_path)
+                if full_path and f.is_new:
+                    event_log.set_full(rid, full_path)
                 if f.label == "LOW_QUALITY":     # у него crop пустой — пишем кроп лица
                     cp = _save_face_crop(r.frame, f.bbox, r.cam_id, ts, lowq_dir)
                     if cp:

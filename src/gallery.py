@@ -288,11 +288,33 @@ class Gallery:
         return [i.label for i in self.identities
                 if i.provisional and not i.known and (now - i.last_seen) > ttl_seconds]
 
-    def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, score: float, ts: float):
-        """Добавить ещё один ракурс, если их мало и кадр достаточно «другой»."""
+    def _save_angle_photo(self, ident: Identity, frame, bbox):
+        """Фото ракурса: faces/<label>_r<N>.jpg (N = номер эмбеддинга, JPEG 100)."""
+        crop = self._crop_face(frame, bbox)
+        if crop is None:
+            return
+        path = os.path.join(self.faces_dir, f"{ident.label}_r{ident.n_emb}.jpg")
+        cv2.imwrite(path, _enhance_gallery_crop(crop), [cv2.IMWRITE_JPEG_QUALITY, 100])
+
+    def angle_photos(self, label: str) -> list[str]:
+        """Пути (относительно проекта) фото ракурсов человека, по порядку."""
+        try:
+            names = sorted(n for n in os.listdir(self.faces_dir)
+                           if n.startswith(f"{label}_r") and n.endswith(".jpg"))
+        except OSError:
+            return []
+        return [os.path.relpath(os.path.join(self.faces_dir, n), _project_root())
+                for n in names]
+
+    def maybe_add_embedding(self, ident: Identity, emb: np.ndarray, score: float,
+                            ts: float, frame=None, bbox=None):
+        """Добавить ещё один ракурс, если их мало и кадр достаточно «другой».
+        Если передан кадр — сохраняем и ФОТО ракурса (запрос 06.08.2026)."""
         ident.last_seen = ts
         if ident.n_emb < self.max_emb and score < self.add_below:
             self._append_embedding(ident.idx, emb)
+            if frame is not None and bbox is not None:
+                self._save_angle_photo(ident, frame, bbox)
             self.save()
 
     # ------------------- известные люди (модуль known faces) -------------------
@@ -327,16 +349,20 @@ class Gallery:
             self.save()
             return ident
 
-    def add_known_embedding(self, label: str, normed_emb) -> Identity | None:
+    def add_known_embedding(self, label: str, normed_emb,
+                            image_bgr=None, bbox=None) -> Identity | None:
         """
         Дописать известному человеку ещё один ракурс (повторная загрузка фото
         с label=known_XXXX). Возвращает Identity или None, если label не найден.
+        Если передано фото — сохраняем и снимок ракурса.
         """
         with self.lock:
             ident = self.get_by_label(label)
             if ident is None or not ident.known:
                 return None
             self._append_embedding(ident.idx, normed_emb)
+            if image_bgr is not None and bbox is not None:
+                self._save_angle_photo(ident, image_bgr, bbox)
             self.save()
             return ident
 
@@ -376,12 +402,15 @@ class Gallery:
             if self.embeddings.shape[0]:
                 self.index.add(np.ascontiguousarray(self.embeddings, dtype=np.float32))
 
-            # удаляем файл снимка
+            # удаляем файл снимка + фото ракурсов (<label>_r*.jpg)
             abs_crop = crop_path if os.path.isabs(crop_path) else \
                 os.path.join(_project_root(), crop_path)
             try:
                 if os.path.exists(abs_crop):
                     os.remove(abs_crop)
+                for n in os.listdir(self.faces_dir):
+                    if n.startswith(f"{label}_r") and n.endswith(".jpg"):
+                        os.remove(os.path.join(self.faces_dir, n))
             except OSError:
                 pass
 

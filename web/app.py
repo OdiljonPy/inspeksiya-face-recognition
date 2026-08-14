@@ -656,6 +656,17 @@ def _gallery_face_urls() -> dict:
     return out
 
 
+def _angle_urls(request: Request, label: str) -> list:
+    """Абсолютные URL фото РАКУРСОВ человека (faces/<label>_r*.jpg), по порядку."""
+    try:
+        names = sorted(n for n in os.listdir(FACES_DIR)
+                       if n.startswith(f"{label}_r") and n.endswith(".jpg"))
+    except OSError:
+        return []
+    return [_abs(request, _versioned("/faces", FACES_DIR, os.path.join(FACES_DIR, n)))
+            for n in names]
+
+
 @app.get("/api/v1/faces")
 def api_v1_faces(request: Request,
                  object_id: str = Query("", description="фильтр по объекту"),
@@ -757,6 +768,7 @@ def api_v1_persons(request: Request,
         "last_seen": r["last_seen"], "last_seen_dt": _iso(r["last_seen"]),
         "cameras": (r["cams"] or "").split(","),
         "face_url": _abs(request, faces.get(r["person"], "")),
+        "angle_urls": _angle_urls(request, r["person"]),
     } for r in rows]
     obj_inns = _object_inns().get(object_id, {}) if object_id else {}
     return {"total": total, "limit": limit, "offset": offset,
@@ -765,6 +777,70 @@ def api_v1_persons(request: Request,
             "zakazchik_inn": obj_inns.get("zakazchik_inn"),
             "construction_inn": obj_inns.get("construction_inn"),
             "items": items}
+
+
+@app.get("/api/v1/attendance")
+def api_v1_attendance(request: Request,
+                      object_id: str = Query("", description="фильтр по объекту"),
+                      object_index: str = Query("", description="фильтр по индексу объекта (внешняя система)"),
+                      date_from: str = Query("", description="unix ts | YYYY-MM-DD; пусто = 7 дней назад"),
+                      date_to: str = Query("", description="то же; YYYY-MM-DD — включительно"),
+                      include_people: int = Query(1, description="1 = со списком людей по каждому дню")):
+    """
+    API 1б: ПОСЕЩАЕМОСТЬ ПО ДНЯМ. На каждую дату — сколько уникальных людей
+    было на объекте + (include_people=1) список этих людей с фото из галереи
+    и фото ракурсов. Unknown/LOW_QUALITY считаются отдельно (unknown_events).
+    """
+    object_id = _resolve_object_index(object_index, object_id)
+    if not os.path.exists(DB_PATH):
+        return {"total_days": 0, "items": []}
+    frm, to = _parse_ts(date_from), _parse_ts(date_to, end_of_day=True)
+    if frm is None:                                   # дефолт: последние 7 дней
+        d = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        frm = d.timestamp() - 6 * 86400
+    where, params = ["ts >= ?"], [frm]
+    if to is not None:
+        where.append("ts <= ?"); params.append(to)
+    if object_id:
+        where.append("object_id = ?"); params.append(object_id)
+    cond = " WHERE " + " AND ".join(where)
+    ph = ",".join("?" * len(_UNIDENT))
+    faces = _gallery_face_urls()
+    known = _known_names()
+    days: dict[str, dict] = {}
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT date(ts,'unixepoch','localtime') d, person, COUNT(*) c, "
+            f"MIN(ts) f, MAX(ts) l FROM events{cond} AND person NOT IN ({ph}) "
+            "GROUP BY d, person ORDER BY d, f", params + list(_UNIDENT)).fetchall()
+        unk = conn.execute(
+            "SELECT date(ts,'unixepoch','localtime') d, COUNT(*) c "
+            f"FROM events{cond} AND person IN ({ph}) GROUP BY d",
+            params + list(_UNIDENT)).fetchall()
+    for r in rows:
+        day = days.setdefault(r["d"], {"date": r["d"], "people": 0,
+                                       "unknown_events": 0, "persons": []})
+        day["people"] += 1
+        if include_people:
+            day["persons"].append({
+                "person": r["person"], "person_name": known.get(r["person"], ""),
+                "events": r["c"],
+                "first_seen": r["f"], "first_seen_dt": _iso(r["f"]),
+                "last_seen": r["l"], "last_seen_dt": _iso(r["l"]),
+                "face_url": _abs(request, faces.get(r["person"], "")),
+                "angle_urls": _angle_urls(request, r["person"]),
+            })
+    for r in unk:
+        days.setdefault(r["d"], {"date": r["d"], "people": 0,
+                                 "unknown_events": 0, "persons": []})
+        days[r["d"]]["unknown_events"] = r["c"]
+    items = [days[d] for d in sorted(days)]
+    if not include_people:
+        for it in items:
+            it.pop("persons", None)
+    return {"object_id": object_id or None,
+            "object_index": _object_indexes().get(object_id) if object_id else None,
+            "total_days": len(items), "items": items}
 
 
 @app.get("/api/v1/vehicles")
@@ -1071,7 +1147,8 @@ def api_v1_known_face_add(request: Request, body: KnownFaceIn):
     if body.label:                      # ещё ракурс(ы) существующему
         ident = None
         for img, face, q in decoded:
-            ident = g.add_known_embedding(body.label, face.normed_embedding)
+            ident = g.add_known_embedding(body.label, face.normed_embedding,
+                                          image_bgr=img, bbox=face.bbox)
             if ident is None:
                 raise HTTPException(status_code=404,
                                     detail=f"известный {body.label!r} не найден")
@@ -1094,12 +1171,14 @@ def api_v1_known_face_add(request: Request, body: KnownFaceIn):
         ident = g.add_known(face.normed_embedding, img, face.bbox, name,
                             object_index=body.object_index)
         for img2, face2, q2 in decoded[1:]:
-            g.add_known_embedding(ident.label, face2.normed_embedding)
+            g.add_known_embedding(ident.label, face2.normed_embedding,
+                                  image_bgr=img2, bbox=face2.bbox)
     return {"label": ident.label, "full_name": ident.name,
             "object_index": ident.object_index, "n_emb": ident.n_emb,
             "photos_accepted": len(decoded),
             "enrolled": ident.first_seen, "enrolled_dt": _iso(ident.first_seen),
-            "face_url": _abs(request, _face_url(ident.crop_path))}
+            "face_url": _abs(request, _face_url(ident.crop_path)),
+            "angle_urls": _angle_urls(request, ident.label)}
 
 
 @app.get("/api/v1/known-faces")
@@ -1151,6 +1230,7 @@ def api_v1_known_faces(request: Request,
             "last_seen": seen, "last_seen_dt": _iso(seen) if seen else "",
             "n_emb": idn.get("n_emb", 0),
             "face_url": _abs(request, _face_url(idn["crop_path"])),
+            "angle_urls": _angle_urls(request, idn["label"]),
         })
     items.sort(key=lambda x: x["label"])
     return {"total": len(items), "items": items}
